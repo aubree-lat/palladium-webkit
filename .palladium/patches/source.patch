@@ -1,0 +1,663 @@
+diff --git a/Source/JavaScriptCore/runtime/FunctionExecutable.cpp b/Source/JavaScriptCore/runtime/FunctionExecutable.cpp
+index 89ff4c17..6860a820 100644
+--- a/Source/JavaScriptCore/runtime/FunctionExecutable.cpp
++++ b/Source/JavaScriptCore/runtime/FunctionExecutable.cpp
+@@ -174,6 +174,8 @@ JSString* FunctionExecutable::toStringSlow(JSGlobalObject* globalObject)
+     auto throwScope = DECLARE_THROW_SCOPE(vm);
+ 
+     const auto& cache = [&](JSString* asString) {
++        if (asString->length() >= 16 * 1024)
++            return asString;
+         WTF::storeStoreFence();
+         m_rareData->m_asString.set(vm, this, asString);
+         return asString;
+diff --git a/Source/WebCore/Modules/mediastream/MediaDevices.cpp b/Source/WebCore/Modules/mediastream/MediaDevices.cpp
+index af593956..a16740f0 100644
+--- a/Source/WebCore/Modules/mediastream/MediaDevices.cpp
++++ b/Source/WebCore/Modules/mediastream/MediaDevices.cpp
+@@ -302,6 +302,14 @@ void MediaDevices::getDisplayMedia(DisplayMediaStreamConstraints&& constraints,
+         return;
+     }
+ 
++    auto audioConstraints = createMediaConstraints(constraints.audio);
++    auto requestType = MediaStreamRequest::Type::DisplayMedia;
++#if USE(GLIB)
++    if (audioConstraints.isValid) {
++        audioConstraints.setDefaultAudioConstraints();
++        requestType = MediaStreamRequest::Type::DisplayMediaWithAudio;
++    }
++#endif
+     auto videoConstraints = createMediaConstraints(constraints.video);
+     if (hasInvalidGetDisplayMediaConstraint(videoConstraints)) {
+         promise.reject(Exception { ExceptionCode::TypeError, "getDisplayMedia must be called with valid constraints."_s });
+@@ -314,7 +322,7 @@ void MediaDevices::getDisplayMedia(DisplayMediaStreamConstraints&& constraints,
+         return;
+     }
+ 
+-    auto request = UserMediaRequest::create(*document, { MediaStreamRequest::Type::DisplayMedia, { }, WTF::move(videoConstraints), isUserGesturePriviledged, *document->pageID() }, WTF::move(constraints.audio), WTF::move(constraints.video), WTF::move(promise));
++    auto request = UserMediaRequest::create(*document, { requestType, WTF::move(audioConstraints), WTF::move(videoConstraints), isUserGesturePriviledged, *document->pageID() }, WTF::move(constraints.audio), WTF::move(constraints.video), WTF::move(promise));
+     request->start();
+ }
+ 
+diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
+index f9dd520c..3ff468fe 100644
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
+@@ -1603,40 +1603,11 @@ void GStreamerMediaEndpoint::connectIncomingTrack(WebRTCTrackData& data)
+             return;
+     }
+ 
+-    m_pendingIncomingTracks.append(&track.privateTrack());
+-
+-    unsigned totalExpectedMediaTracks = 0;
+-    forEachTransceiver(m_webrtcBin, [&](auto&& transceiver) -> bool {
+-        GstWebRTCRTPTransceiverDirection direction;
+-        g_object_get(transceiver.get(), "current-direction", &direction, nullptr);
+-        switch (direction) {
+-        case GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_NONE:
+-        case GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_INACTIVE:
+-        case GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY:
+-            break;
+-        case GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_RECVONLY:
+-        case GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV:
+-            totalExpectedMediaTracks++;
+-            break;
+-        }
+-        return false;
+-    });
+-
+-    GST_DEBUG_OBJECT(m_pipeline.get(), "Expecting %u media tracks", totalExpectedMediaTracks);
+-    if (m_pendingIncomingTracks.size() < totalExpectedMediaTracks) {
+-        GST_DEBUG_OBJECT(m_pipeline.get(), "Only %zu track(s) received so far", m_pendingIncomingTracks.size());
+-        return;
+-    }
+-
+     GST_DEBUG_OBJECT(m_pipeline.get(), "Incoming stream %s ready, notifying observers", data.mediaStreamId.ascii().data());
+-    for (auto& track : m_pendingIncomingTracks) {
+-        GST_DEBUG_OBJECT(m_pipeline.get(), "Incoming stream has track %s", track->id().utf8().data());
+-        ALWAYS_LOG(LOGIDENTIFIER, "Data flow started on track "_s, track->id());
+-        track->dataFlowStarted();
+-        track->source().setMuted(false);
+-    }
++    ALWAYS_LOG(LOGIDENTIFIER, "Data flow started on track "_s, track.id());
++    track.privateTrack().dataFlowStarted();
++    source.setMuted(false);
+ 
+-    m_pendingIncomingTracks.clear();
+     gst_element_set_state(m_pipeline.get(), GST_STATE_PLAYING);
+ }
+ 
+diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.h b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.h
+index fd4bed8b..495ccbc6 100644
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.h
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.h
+@@ -224,7 +224,6 @@ private:
+ 
+     bool m_shouldIgnoreNegotiationNeededSignal { false };
+ 
+-    Vector<RefPtr<MediaStreamTrackPrivate>> m_pendingIncomingTracks;
+ 
+     Vector<RefPtr<RealtimeOutgoingMediaSourceGStreamer>> m_unlinkedOutgoingSources;
+ 
+diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpReceiverBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpReceiverBackend.cpp
+index bd263d90..1115706e 100644
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpReceiverBackend.cpp
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpReceiverBackend.cpp
+@@ -140,6 +140,9 @@ Ref<RealtimeMediaSource> GStreamerRtpReceiverBackend::createSource(const String&
+ 
+ Ref<RTCRtpTransformBackend> GStreamerRtpReceiverBackend::rtcRtpTransformBackend()
+ {
++    GstWebRTCKind kind;
++    g_object_get(m_rtcTransceiver.get(), "kind", &kind, nullptr);
++    g_object_set_data(G_OBJECT(m_rtcReceiver.get()), "palladium-audio", GINT_TO_POINTER(kind == GST_WEBRTC_KIND_AUDIO));
+     return GStreamerRtpReceiverTransformBackend::create(m_rtcReceiver);
+ }
+ 
+diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpReceiverTransformBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpReceiverTransformBackend.cpp
+index 6e4f1e5b..57cd502e 100644
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpReceiverTransformBackend.cpp
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpReceiverTransformBackend.cpp
+@@ -26,14 +26,8 @@
+ 
+ namespace WebCore {
+ 
+-static inline GStreamerRtpReceiverTransformBackend::MediaType mediaTypeFromReceiver(GstWebRTCRTPReceiver*)
+-{
+-    notImplemented();
+-    return RTCRtpTransformBackend::MediaType::Video;
+-}
+-
+ GStreamerRtpReceiverTransformBackend::GStreamerRtpReceiverTransformBackend(const GRefPtr<GstWebRTCRTPReceiver>& rtcReceiver)
+-    : GStreamerRtpTransformBackend(mediaTypeFromReceiver(rtcReceiver.get()), Side::Receiver)
++    : GStreamerRtpTransformBackend(GST_OBJECT(rtcReceiver.get()), Side::Receiver)
+     , m_rtcReceiver(rtcReceiver)
+ {
+ }
+@@ -43,7 +37,6 @@ GStreamerRtpReceiverTransformBackend::~GStreamerRtpReceiverTransformBackend() =
+ void GStreamerRtpReceiverTransformBackend::setTransformableFrameCallback(Callback&& callback)
+ {
+     setInputCallback(WTF::move(callback));
+-    notImplemented();
+ }
+ 
+ bool GStreamerRtpReceiverTransformBackend::requestKeyFrame(const String&)
+diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp
+index 7de865f8..08c7b3c6 100644
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp
+@@ -294,6 +294,7 @@ std::unique_ptr<RTCDTMFSenderBackend> GStreamerRtpSenderBackend::createDTMFBacke
+ 
+ Ref<RTCRtpTransformBackend> GStreamerRtpSenderBackend::rtcRtpTransformBackend()
+ {
++    g_object_set_data(G_OBJECT(m_rtcSender.get()), "palladium-audio", GINT_TO_POINTER(!!audioSource()));
+     return GStreamerRtpSenderTransformBackend::create(m_rtcSender);
+ }
+ 
+diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderTransformBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderTransformBackend.cpp
+index eed2fca5..ad112878 100644
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderTransformBackend.cpp
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderTransformBackend.cpp
+@@ -30,14 +30,8 @@ namespace WebCore {
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(GStreamerRtpSenderTransformBackend);
+ 
+-static inline GStreamerRtpSenderTransformBackend::MediaType mediaTypeFromSender(GstWebRTCRTPSender*)
+-{
+-    notImplemented();
+-    return RTCRtpTransformBackend::MediaType::Video;
+-}
+-
+ GStreamerRtpSenderTransformBackend::GStreamerRtpSenderTransformBackend(const GRefPtr<GstWebRTCRTPSender>& rtcSender)
+-    : GStreamerRtpTransformBackend(mediaTypeFromSender(rtcSender.get()), Side::Sender)
++    : GStreamerRtpTransformBackend(GST_OBJECT(rtcSender.get()), Side::Sender)
+     , m_rtcSender(rtcSender)
+ {
+ }
+@@ -47,7 +41,6 @@ GStreamerRtpSenderTransformBackend::~GStreamerRtpSenderTransformBackend() = defa
+ void GStreamerRtpSenderTransformBackend::setTransformableFrameCallback(Callback&& callback)
+ {
+     setInputCallback(WTF::move(callback));
+-    notImplemented();
+ }
+ 
+ bool GStreamerRtpSenderTransformBackend::requestKeyFrame(const String&)
+diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
+index 2ec70d5b..7690c96c 100644
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
+@@ -22,24 +22,206 @@
+ 
+ #if ENABLE(WEB_RTC) && USE(GSTREAMER_WEBRTC)
+ 
+-#include "NotImplemented.h"
++#include "RTCRtpTransformableFrame.h"
++#include <gst/rtp/gstrtpbuffer.h>
++#include <wtf/NeverDestroyed.h>
++#include <wtf/WorkQueue.h>
++#include <atomic>
++#include <memory>
+ 
+ namespace WebCore {
+ 
++// Opus has one encoded frame per RTP payload. Video requires frame reassembly
++// before the worker boundary and is deliberately not handled by this bridge.
++class GStreamerAudioTransformableFrame final : public RTCRtpTransformableFrame {
++public:
++    GStreamerAudioTransformableFrame(GstBuffer* buffer, GstPad* output, uint64_t generation, std::shared_ptr<std::atomic<unsigned>> pending)
++        : m_buffer(buffer)
++        , m_output(output)
++        , m_generation(generation)
++        , m_pending(WTF::move(pending))
++    {
++        ++*m_pending;
++        GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
++        if (!gst_rtp_buffer_map(buffer, GST_MAP_READ, &rtp))
++            return;
++        auto size = gst_rtp_buffer_get_payload_len(&rtp);
++        m_data.append(std::span { static_cast<const uint8_t*>(gst_rtp_buffer_get_payload(&rtp)), size });
++        m_header.resize(gst_rtp_buffer_get_header_len(&rtp));
++        gst_buffer_extract(buffer, 0, m_header.mutableSpan().data(), m_header.size());
++        m_header[0] &= ~0x20; // Padding is not part of the encoded frame.
++        m_metadata.synchronizationSource = gst_rtp_buffer_get_ssrc(&rtp);
++        m_metadata.payloadType = gst_rtp_buffer_get_payload_type(&rtp);
++        m_metadata.sequenceNumber = gst_rtp_buffer_get_seq(&rtp);
++        m_metadata.rtpTimestamp = gst_rtp_buffer_get_timestamp(&rtp);
++        m_metadata.mimeType = "audio/opus"_s;
++        Vector<uint32_t> sources;
++        for (unsigned i = 0; i < gst_rtp_buffer_get_csrc_count(&rtp); ++i)
++            sources.append(gst_rtp_buffer_get_csrc(&rtp, i));
++        m_metadata.contributingSources = WTF::move(sources);
++        gst_rtp_buffer_unmap(&rtp);
++    }
++
++    ~GStreamerAudioTransformableFrame() { --*m_pending; }
++    std::span<const uint8_t> data() const final { return m_data.span(); }
++    void setData(std::span<const uint8_t> data) final { m_data.clear(); m_data.append(data); }
++    uint64_t timestamp() const final { return m_metadata.rtpTimestamp.value_or(0); }
++    RTCEncodedAudioFrameMetadata audioMetadata() const final { return m_metadata; }
++    RTCEncodedVideoFrameMetadata videoMetadata() const final { return { }; }
++    bool isKeyFrame() const final { return false; }
++    void setOptions(const RTCEncodedAudioFrameMetadata&) final { } // RTP identity remains immutable.
++    void setOptions(const RTCEncodedVideoFrameMetadata&) final { }
++    Ref<RTCRtpTransformableFrame> clone() final
++    {
++        auto copy = adoptRef(*new GStreamerAudioTransformableFrame(m_buffer.get(), m_output.get(), m_generation, m_pending));
++        copy->setData(m_data.span());
++        return copy;
++    }
++
++    GRefPtr<GstBuffer> takeBuffer()
++    {
++        if (std::exchange(m_consumed, true) || m_header.isEmpty() || m_data.size() > 65535 - m_header.size())
++            return nullptr;
++        GRefPtr result = adoptGRef(gst_buffer_new_allocate(nullptr, m_header.size() + m_data.size(), nullptr));
++        gst_buffer_copy_into(result.get(), m_buffer.get(), GST_BUFFER_COPY_METADATA, 0, -1);
++        gst_buffer_fill(result.get(), 0, m_header.span().data(), m_header.size());
++        gst_buffer_fill(result.get(), m_header.size(), m_data.span().data(), m_data.size());
++        return result;
++    }
++    GstPad* output() const { return m_output.get(); }
++    uint64_t generation() const { return m_generation; }
++
++private:
++    GRefPtr<GstBuffer> m_buffer;
++    GRefPtr<GstPad> m_output;
++    Vector<uint8_t> m_data;
++    Vector<uint8_t> m_header;
++    RTCEncodedAudioFrameMetadata m_metadata;
++    uint64_t m_generation;
++    std::shared_ptr<std::atomic<unsigned>> m_pending;
++    bool m_consumed { false };
++};
++
++class GStreamerRtpTransformState : public ThreadSafeRefCounted<GStreamerRtpTransformState> {
++public:
++    Lock lock;
++    RTCRtpTransformBackend::Callback callback WTF_GUARDED_BY_LOCK(lock);
++    bool active WTF_GUARDED_BY_LOCK(lock) { false };
++    uint64_t generation WTF_GUARDED_BY_LOCK(lock) { 0 };
++    std::shared_ptr<std::atomic<unsigned>> pending { std::make_shared<std::atomic<unsigned>>(0) };
++    std::atomic<unsigned> queuedOutputs { 0 };
++    const Ref<WorkQueue> outputQueue { WorkQueue::create("Palladium Opus transform"_s) };
++};
++
++static Ref<GStreamerRtpTransformState> stateFor(GstObject* object)
++{
++    static NeverDestroyed<Lock> creationLock;
++    Locker locker { creationLock.get() };
++    auto* state = static_cast<GStreamerRtpTransformState*>(g_object_get_data(G_OBJECT(object), "palladium-opus-transform"));
++    if (!state) {
++        Ref created = adoptRef(*new GStreamerRtpTransformState);
++        state = &created.leakRef();
++        g_object_set_data_full(G_OBJECT(object), "palladium-opus-transform", state, [](gpointer data) {
++            static_cast<GStreamerRtpTransformState*>(data)->deref();
++        });
++    }
++    return *state;
++}
++
++GStreamerRtpTransformBackend::GStreamerRtpTransformBackend(GstObject* object, Side side)
++    : m_side(side)
++    , m_state(stateFor(object))
++    , m_isAudio(GPOINTER_TO_INT(g_object_get_data(G_OBJECT(object), "palladium-audio")))
++{
++    // Block payloads while the worker is being attached. Never send untransformed
++    // audio after the application has requested an encoded transform.
++    Locker locker { m_state->lock };
++    m_state->active = true;
++    ++m_state->generation;
++}
++
++GStreamerRtpTransformBackend::~GStreamerRtpTransformBackend() = default;
++
++RTCRtpTransformBackend::MediaType GStreamerRtpTransformBackend::mediaType() const
++{
++    return m_isAudio ? MediaType::Audio : MediaType::Video;
++}
++
+ void GStreamerRtpTransformBackend::setInputCallback(Callback&& callback)
+ {
+-    Locker holdLock { m_inputCallbackLock };
+-    m_inputCallback = WTF::move(callback);
++    Locker locker { m_state->lock };
++    m_state->callback = WTF::move(callback);
+ }
+ 
+ void GStreamerRtpTransformBackend::clearTransformableFrameCallback()
+ {
+-    setInputCallback({ });
++    Locker locker { m_state->lock };
++    m_state->callback = { };
++    // Keep this endpoint blocked after a worker closes. Replacing the transform
++    // installs a new generation; closing a worker must not leak plaintext.
++    ++m_state->generation;
++}
++
++void GStreamerRtpTransformBackend::processTransformedFrame(RTCRtpTransformableFrame& frame)
++{
++    if (!m_isAudio)
++        return;
++    auto& audio = static_cast<GStreamerAudioTransformableFrame&>(frame);
++    auto buffer = audio.takeBuffer();
++    if (!buffer)
++        return;
++    if (m_state->queuedOutputs.fetch_add(1) >= 128) {
++        --m_state->queuedOutputs;
++        return;
++    }
++    m_state->outputQueue->dispatch([state = m_state.copyRef(), output = GRefPtr(audio.output()), buffer = WTF::move(buffer), generation = audio.generation()]() mutable {
++        {
++            Locker locker { state->lock };
++            if (generation != state->generation || !state->callback) {
++                --state->queuedOutputs;
++                return;
++            }
++        }
++        // A serial queue preserves packet order without blocking the media thread
++        // while JavaScript handles a frame. The sink pad serializes against flush.
++        if (gst_pad_is_active(output.get()) && gst_pad_is_linked(output.get()))
++            gst_pad_chain(output.get(), buffer.leakRef());
++        --state->queuedOutputs;
++    });
+ }
+ 
+-void GStreamerRtpTransformBackend::processTransformedFrame(RTCRtpTransformableFrame&)
++void GStreamerRtpTransformBackend::installTransform(GstPad* pad, GstObject* object)
+ {
+-    notImplemented();
++    if (!pad || !object || g_object_get_data(G_OBJECT(pad), "palladium-opus-probe"))
++        return;
++    g_object_set_data(G_OBJECT(pad), "palladium-opus-probe", GINT_TO_POINTER(1));
++    auto state = stateFor(object);
++    gst_pad_add_probe(pad, static_cast<GstPadProbeType>(GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST), [](GstPad* pad, GstPadProbeInfo* info, gpointer data) -> GstPadProbeReturn {
++        auto& state = *static_cast<GStreamerRtpTransformState*>(data);
++        Locker locker { state.lock };
++        if (!state.active)
++            return GST_PAD_PROBE_OK;
++        if (!state.callback || *state.pending >= 128)
++            return GST_PAD_PROBE_DROP;
++        GRefPtr caps = adoptGRef(gst_pad_get_current_caps(pad));
++        const auto* structure = caps && !gst_caps_is_empty(caps.get()) ? gst_caps_get_structure(caps.get(), 0) : nullptr;
++        if (!structure || g_strcmp0(gst_structure_get_string(structure, "encoding-name"), "OPUS"))
++            return GST_PAD_PROBE_DROP;
++        GRefPtr output = adoptGRef(gst_pad_get_peer(pad));
++        if (!output)
++            return GST_PAD_PROBE_DROP;
++        auto transform = [&](GstBuffer* buffer) {
++            if (*state.pending < 128)
++                state.callback(adoptRef(*new GStreamerAudioTransformableFrame(buffer, output.get(), state.generation, state.pending)));
++        };
++        if (info->type & GST_PAD_PROBE_TYPE_BUFFER_LIST) {
++            auto* list = GST_PAD_PROBE_INFO_BUFFER_LIST(info);
++            for (unsigned i = 0; i < gst_buffer_list_length(list); ++i)
++                transform(gst_buffer_list_get(list, i));
++        } else
++            transform(GST_PAD_PROBE_INFO_BUFFER(info));
++        return GST_PAD_PROBE_DROP;
++    }, &state.leakRef(), [](gpointer data) { static_cast<GStreamerRtpTransformState*>(data)->deref(); });
+ }
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.h b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.h
+index 1de77175..4036a32d 100644
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.h
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.h
+@@ -22,17 +22,24 @@
+ #if ENABLE(WEB_RTC) && USE(GSTREAMER_WEBRTC)
+ 
+ #include "RTCRtpTransformBackend.h"
++#include "GRefPtrGStreamer.h"
+ #include <wtf/Lock.h>
+ 
+ namespace WebCore {
+ 
++class GStreamerRtpTransformState;
++
+ class GStreamerRtpTransformBackend : public RTCRtpTransformBackend {
++public:
++    ~GStreamerRtpTransformBackend();
++    static void installTransform(GstPad*, GstObject*);
++
+ protected:
+-    GStreamerRtpTransformBackend(MediaType, Side);
++    GStreamerRtpTransformBackend(GstObject*, Side);
+     void setInputCallback(Callback&&);
+ 
+ protected:
+-    MediaType mediaType() const final { return m_mediaType; }
++    MediaType mediaType() const final;
+ 
+ private:
+     // RTCRtpTransformBackend
+@@ -40,20 +47,11 @@ private:
+     void clearTransformableFrameCallback() final;
+     Side side() const final { return m_side; }
+ 
+-    MediaType m_mediaType;
+     Side m_side;
+-
+-    Lock m_inputCallbackLock;
+-    Callback m_inputCallback;
+-
++    Ref<GStreamerRtpTransformState> m_state;
++    bool m_isAudio;
+ };
+ 
+-inline GStreamerRtpTransformBackend::GStreamerRtpTransformBackend(MediaType mediaType, Side side)
+-    : m_mediaType(mediaType)
+-    , m_side(side)
+-{
+-}
+-
+ } // namespace WebCore
+ 
+ #endif // ENABLE(WEB_RTC) && USE(GSTREAMER_WEBRTC)
+diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerWebRTCUtils.h b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerWebRTCUtils.h
+index 6fefd87d..3a8c0a4d 100644
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerWebRTCUtils.h
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerWebRTCUtils.h
+@@ -47,6 +47,10 @@
+ #include <gst/webrtc/webrtc.h>
+ #undef GST_USE_UNSTABLE_API
+ 
++extern "C" GQuark webkitGstWebRTCErrorQuark(void) __asm__("gst_webrtc_error_quark");
++#undef GST_WEBRTC_ERROR
++#define GST_WEBRTC_ERROR webkitGstWebRTCErrorQuark()
++
+ #include <wtf/TZoneMalloc.h>
+ #include <wtf/ThreadSafeRefCounted.h>
+ 
+diff --git a/Source/WebCore/platform/mediastream/RealtimeMediaSourceCenter.cpp b/Source/WebCore/platform/mediastream/RealtimeMediaSourceCenter.cpp
+index 865a85d9..f9279779 100644
+--- a/Source/WebCore/platform/mediastream/RealtimeMediaSourceCenter.cpp
++++ b/Source/WebCore/platform/mediastream/RealtimeMediaSourceCenter.cpp
+@@ -216,8 +216,27 @@ void RealtimeMediaSourceCenter::triggerDevicesChangedObservers()
+     });
+ }
+ 
+-void RealtimeMediaSourceCenter::getDisplayMediaDevices(const MediaStreamRequest& request, MediaDeviceHashSalts&& hashSalts, Vector<DeviceInfo>& displayDeviceInfo, MediaConstraintType& firstInvalidConstraint)
++void RealtimeMediaSourceCenter::getDisplayMediaDevices(const MediaStreamRequest& request, MediaDeviceHashSalts&& hashSalts, Vector<DeviceInfo>& audioDeviceInfo, Vector<DeviceInfo>& displayDeviceInfo, MediaConstraintType& firstInvalidConstraint)
+ {
++    if (request.audioConstraints.isValid) {
++        for (auto& device : audioCaptureFactory().audioCaptureDeviceManager().captureDevices()) {
++            if (!device.enabled() || device.type() != CaptureDevice::DeviceType::SystemAudio)
++                continue;
++
++            auto sourceOrError = audioCaptureFactory().createAudioCaptureSource(device, MediaDeviceHashSalts { hashSalts }, &request.audioConstraints, request.pageIdentifier);
++            if (!sourceOrError)
++                continue;
++
++            if (auto invalidConstraint = RefPtr { sourceOrError.captureSource }->hasAnyInvalidConstraint(request.audioConstraints)) {
++                if (firstInvalidConstraint == MediaConstraintType::Unknown)
++                    firstInvalidConstraint = *invalidConstraint;
++                continue;
++            }
++
++            audioDeviceInfo.append({ sourceOrError.captureSource->fitnessScore(), device });
++        }
++    }
++
+     if (!request.videoConstraints.isValid)
+         return;
+ 
+@@ -247,6 +266,8 @@ void RealtimeMediaSourceCenter::getUserMediaDevices(const MediaStreamRequest& re
+         for (auto& device : audioCaptureFactory().audioCaptureDeviceManager().captureDevices()) {
+             if (!device.enabled() || device.isSpeakerDevice())
+                 continue;
++            if (device.type() != CaptureDevice::DeviceType::Microphone)
++                continue;
+ 
+             auto sourceOrError = audioCaptureFactory().createAudioCaptureSource(device, MediaDeviceHashSalts { hashSalts }, { }, request.pageIdentifier);
+             if (!sourceOrError)
+@@ -333,7 +354,7 @@ Expected<RealtimeMediaSourceCenter::ValidDevices, MediaConstraintType> RealtimeM
+ 
+     auto& displayCaptureManager = displayCaptureFactory().displayCaptureDeviceManager();
+     if (displayCaptureManager.requiresCaptureDevicesEnumeration() && (request.type == MediaStreamRequest::Type::DisplayMedia || request.type == MediaStreamRequest::Type::DisplayMediaWithAudio))
+-        getDisplayMediaDevices(request, MediaDeviceHashSalts { deviceIdentifierHashSalts }, videoDeviceInfo, firstInvalidConstraint);
++        getDisplayMediaDevices(request, MediaDeviceHashSalts { deviceIdentifierHashSalts }, audioDeviceInfo, videoDeviceInfo, firstInvalidConstraint);
+     else
+         getUserMediaDevices(request, MediaDeviceHashSalts { deviceIdentifierHashSalts }, audioDeviceInfo, videoDeviceInfo, firstInvalidConstraint);
+ 
+diff --git a/Source/WebCore/platform/mediastream/RealtimeMediaSourceCenter.h b/Source/WebCore/platform/mediastream/RealtimeMediaSourceCenter.h
+index 7b0b5ffd..0bd30e55 100644
+--- a/Source/WebCore/platform/mediastream/RealtimeMediaSourceCenter.h
++++ b/Source/WebCore/platform/mediastream/RealtimeMediaSourceCenter.h
+@@ -132,7 +132,7 @@ private:
+         CaptureDevice device;
+     };
+ 
+-    void getDisplayMediaDevices(const MediaStreamRequest&, MediaDeviceHashSalts&&, Vector<DeviceInfo>&, MediaConstraintType&);
++    void getDisplayMediaDevices(const MediaStreamRequest&, MediaDeviceHashSalts&&, Vector<DeviceInfo>& audioDevices, Vector<DeviceInfo>& videoDevices, MediaConstraintType&);
+     void getUserMediaDevices(const MediaStreamRequest&, MediaDeviceHashSalts&&, Vector<DeviceInfo>& audioDevices, Vector<DeviceInfo>& videoDevices, MediaConstraintType&);
+     void enumerateDevices(bool shouldEnumerateCamera, bool shouldEnumerateDisplay, bool shouldEnumerateMicrophone, bool shouldEnumerateSpeakers, CompletionHandler<void()>&&);
+ 
+diff --git a/Source/WebCore/platform/mediastream/gstreamer/GStreamerCaptureDeviceManager.cpp b/Source/WebCore/platform/mediastream/gstreamer/GStreamerCaptureDeviceManager.cpp
+index 3831a86b..bfbae1f8 100644
+--- a/Source/WebCore/platform/mediastream/gstreamer/GStreamerCaptureDeviceManager.cpp
++++ b/Source/WebCore/platform/mediastream/gstreamer/GStreamerCaptureDeviceManager.cpp
+@@ -113,6 +113,7 @@ void GStreamerCaptureDeviceManager::teardown()
+     m_capturers.clear();
+     RealtimeMediaSourceCenter::singleton().removeDevicesChangedObserver(*this);
+     m_devices.clear();
++    m_speakerDevices.clear();
+     m_gstreamerDevices.clear();
+ }
+ 
+@@ -199,14 +200,15 @@ const Vector<CaptureDevice>& GStreamerCaptureDeviceManager::speakerDevices()
+ std::optional<GStreamerCaptureDevice> GStreamerCaptureDeviceManager::captureDeviceFromGstDevice(GRefPtr<GstDevice>&& device)
+ {
+     GUniquePtr<GstStructure> properties(gst_device_get_properties(device.get()));
+-    auto deviceClassFromProperties = gstStructureGetString(properties.get(), "device.class"_s);
+-    if (deviceClassFromProperties == "monitor"_s)
+-        return { };
+-
+     auto types = deviceTypes();
++    auto deviceClassFromProperties = gstStructureGetString(properties.get(), "device.class"_s);
+     auto deviceClass = GMallocString::unsafeAdoptFromUTF8(gst_device_get_device_class(device.get()));
+     CaptureDevice::DeviceType type;
+-    if (startsWith(deviceClass.span(), "Audio"_s)) {
++    if (deviceClassFromProperties == "monitor"_s) {
++        if (!types.contains(CaptureDevice::DeviceType::SystemAudio))
++            return { };
++        type = CaptureDevice::DeviceType::SystemAudio;
++    } else if (startsWith(deviceClass.span(), "Audio"_s)) {
+         if (types.contains(CaptureDevice::DeviceType::Microphone) && endsWith(deviceClass.span(), "Source"_s))
+             type = CaptureDevice::DeviceType::Microphone;
+         else if (types.contains(CaptureDevice::DeviceType::Speaker) && endsWith(deviceClass.span(), "Sink"_s))
+@@ -399,6 +401,7 @@ void GStreamerCaptureDeviceManager::refreshCaptureDevices()
+             GST_INFO_OBJECT(GST_MESSAGE_SRC(message), "Device changed: %s", name.utf8());
+ #endif
+             manager->updateDevice(WTF::move(device), WTF::move(oldDevice));
++            manager->deviceChanged();
+             break;
+         }
+         default:
+diff --git a/Source/WebCore/platform/mediastream/gstreamer/GStreamerCaptureDeviceManager.h b/Source/WebCore/platform/mediastream/gstreamer/GStreamerCaptureDeviceManager.h
+index 02ef6de3..20bca0e1 100644
+--- a/Source/WebCore/platform/mediastream/gstreamer/GStreamerCaptureDeviceManager.h
++++ b/Source/WebCore/platform/mediastream/gstreamer/GStreamerCaptureDeviceManager.h
+@@ -87,7 +87,7 @@ class GStreamerAudioCaptureDeviceManager final : public GStreamerCaptureDeviceMa
+     friend class NeverDestroyed<GStreamerAudioCaptureDeviceManager>;
+ public:
+     static GStreamerAudioCaptureDeviceManager& singleton();
+-    const OptionSet<CaptureDevice::DeviceType> deviceTypes() const final { return { CaptureDevice::DeviceType::Microphone, CaptureDevice::DeviceType::Speaker }; }
++    const OptionSet<CaptureDevice::DeviceType> deviceTypes() const final { return { CaptureDevice::DeviceType::Microphone, CaptureDevice::DeviceType::Speaker, CaptureDevice::DeviceType::SystemAudio }; }
+ 
+     // ref() and deref() do nothing because this object is a singleton.
+     void ref() const final { }
+diff --git a/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.cpp b/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.cpp
+index 9310c1b3..50ed4803 100644
+--- a/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.cpp
++++ b/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.cpp
+@@ -22,6 +22,7 @@
+ #if USE(GSTREAMER_WEBRTC)
+ 
+ #include "GStreamerCommon.h"
++#include "GStreamerRtpTransformBackend.h"
+ #include "GStreamerQuirks.h"
+ #include "GStreamerRegistryScanner.h"
+ #include "VideoFrameMetadataGStreamer.h"
+@@ -83,6 +84,12 @@ void GStreamerIncomingTrackProcessor::configure(ThreadSafeWeakPtr<GStreamerMedia
+ 
+     g_object_get(m_pad.get(), "transceiver", &m_data.transceiver.outPtr(), nullptr);
+ 
++    {
++        GRefPtr<GstWebRTCRTPReceiver> receiver;
++        g_object_get(m_data.transceiver.get(), "receiver", &receiver.outPtr(), nullptr);
++        GStreamerRtpTransformBackend::installTransform(m_pad.get(), GST_OBJECT(receiver.get()));
++    }
++
+     auto msIdAttribute = gstStructureGetString(structure, "a-msid"_s);
+     if (!msIdAttribute.isEmpty()) {
+         if (startsWith(msIdAttribute.span(), " "_s))
+@@ -408,6 +415,8 @@ void GStreamerIncomingTrackProcessor::installRtpBufferPadProbe(const GRefPtr<Gst
+ 
+ void GStreamerIncomingTrackProcessor::trackReady()
+ {
++    if (m_isReady)
++        return;
+     auto endPoint = m_endPoint.get();
+     if (!endPoint || endPoint->isStopped())
+         return;
+diff --git a/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.cpp b/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.cpp
+index 99473dc0..a6e22f39 100644
+--- a/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.cpp
++++ b/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.cpp
+@@ -23,6 +23,7 @@
+ #if USE(GSTREAMER_WEBRTC)
+ 
+ #include "GStreamerCommon.h"
++#include "GStreamerRtpTransformBackend.h"
+ #include "GStreamerMediaStreamSource.h"
+ #include "MediaStreamTrack.h"
+ 
+@@ -277,6 +278,11 @@ void RealtimeOutgoingMediaSourceGStreamer::setSinkPad(GRefPtr<GstPad>&& pad)
+     }), this);
+     g_object_get(m_transceiver.get(), "sender", &m_sender.outPtr(), nullptr);
+ 
++    {
++        GRefPtr srcPad = adoptGRef(gst_element_get_static_pad(m_bin.get(), "src"));
++        GStreamerRtpTransformBackend::installTransform(srcPad.get(), GST_OBJECT(m_sender.get()));
++    }
++
+     checkMid();
+     g_signal_connect_swapped(m_transceiver.get(), "notify::mid", G_CALLBACK(+[](RealtimeOutgoingMediaSourceGStreamer* source) {
+         source->checkMid();
+diff --git a/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp b/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp
+index 549ee896..c1ced57f 100644
+--- a/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp
++++ b/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp
+@@ -2049,3 +2049,13 @@ WebKitWebView* webkitWebContextGetWebViewForPage(WebKitWebContext* context, WebP
+ {
+     return page ? context->priv->webViews.get(page->identifier()) : nullptr;
+ }
++
++extern "C" WEBKIT_API void webkit_web_context_palladium_release_memory(WebKitWebContext*, gboolean);
++
++void webkit_web_context_palladium_release_memory(WebKitWebContext* context, gboolean critical)
++{
++    g_return_if_fail(WEBKIT_IS_WEB_CONTEXT(context));
++#if OS(LINUX) && !OS(ANDROID)
++    context->priv->processPool->sendMemoryPressureEvent(critical);
++#endif
++}

@@ -278,9 +278,9 @@ void RealtimeOutgoingMediaSourceGStreamer::setSinkPad(GRefPtr<GstPad>&& pad)
     }), this);
     g_object_get(m_transceiver.get(), "sender", &m_sender.outPtr(), nullptr);
 
-    if (m_type == Type::Audio) {
+    {
         GRefPtr srcPad = adoptGRef(gst_element_get_static_pad(m_bin.get(), "src"));
-        GStreamerRtpTransformBackend::installAudioTransform(srcPad.get(), GST_OBJECT(m_sender.get()));
+        GStreamerRtpTransformBackend::installTransform(srcPad.get(), GST_OBJECT(m_sender.get()));
     }
 
     checkMid();

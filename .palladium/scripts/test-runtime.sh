@@ -4,15 +4,36 @@ set -euo pipefail
 if [ "${PALLADIUM_TEST_SESSION:-0}" != 1 ]; then
   export XDG_RUNTIME_DIR
   XDG_RUNTIME_DIR=$(mktemp -d)
+  export XDG_CONFIG_HOME=$XDG_RUNTIME_DIR/config
+  export XDG_STATE_HOME=$XDG_RUNTIME_DIR/state
+  export XDG_CACHE_HOME=$XDG_RUNTIME_DIR/cache
+  export GIO_USE_VFS=local
+  mkdir -p "$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d"
+  cat > "$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d/palladium-test.conf" <<'EOF'
+wireplumber.profiles = {
+  main = {
+    hardware.audio = disabled
+    hardware.bluetooth = disabled
+    hardware.video-capture = disabled
+    monitor.alsa = disabled
+    monitor.bluez = disabled
+    monitor.v4l2 = disabled
+    monitor.libcamera = disabled
+  }
+}
+EOF
   trap 'rm -rf "$XDG_RUNTIME_DIR"' EXIT
   dbus-run-session -- xvfb-run -a env PALLADIUM_TEST_SESSION=1 bash "$0" "$@"
   exit
 fi
 
 export GDK_BACKEND=x11
+export NO_AT_BRIDGE=1
+export GTK_A11Y=none
 export XDG_CURRENT_DESKTOP=GNOME
 export LIBGL_ALWAYS_SOFTWARE=1
 export PULSE_SERVER=unix:$XDG_RUNTIME_DIR/pulse/native
+export PIPEWIRE_RUNTIME_DIR=$XDG_RUNTIME_DIR
 log_dir=.palladium/state/test-logs
 mkdir -p "$log_dir"
 pipewire > "$log_dir/pipewire.log" 2>&1 &
@@ -21,17 +42,26 @@ pipewire-pulse > "$log_dir/pipewire-pulse.log" 2>&1 &
 pulse_pid=$!
 wireplumber > "$log_dir/wireplumber.log" 2>&1 &
 wireplumber_pid=$!
-trap 'kill "$pipewire_pid" "$pulse_pid" "$wireplumber_pid" 2>/dev/null || true' EXIT
+trap 'kill "$pipewire_pid" "$pulse_pid" "$wireplumber_pid" "${loopback_pid:-}" 2>/dev/null || true' EXIT
 ready=0
 for attempt in $(seq 1 40); do
   if pactl info >/dev/null 2>&1; then ready=1; break; fi
   sleep 0.25
 done
 if [ "$ready" != 1 ]; then cat "$log_dir/pipewire-pulse.log" >&2; exit 1; fi
+sleep 1
 pactl load-module module-null-sink sink_name=palladium-test
+sleep 1
 pactl set-default-sink palladium-test
 pactl load-module module-null-sink sink_name=palladium-test-second
-pactl load-module module-remap-source master=palladium-test.monitor source_name=palladium-test-microphone
+pw-loopback -C palladium-test -i 'stream.capture.sink=true node.passive=true' \
+  -o 'media.class=Audio/Source node.name=palladium-test-microphone node.description="Palladium test microphone"' \
+  > "$log_dir/loopback.log" 2>&1 &
+loopback_pid=$!
+for attempt in $(seq 1 40); do
+  if pactl set-default-source palladium-test-microphone 2>/dev/null; then break; fi
+  sleep 0.1
+done
 pactl set-default-source palladium-test-microphone
 probes=(audio encoded-audio staggered-audio devices)
 if [ "$#" -gt 0 ]; then probes=("$@"); fi

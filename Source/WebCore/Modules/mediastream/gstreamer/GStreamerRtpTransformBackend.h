@@ -32,7 +32,7 @@ class GStreamerRtpTransformState;
 class GStreamerRtpTransformBackend : public RTCRtpTransformBackend {
 public:
     ~GStreamerRtpTransformBackend();
-    static void installAudioTransform(GstPad*, GstObject*);
+    static void installTransform(GstPad*, GstObject*);
 
 protected:
     GStreamerRtpTransformBackend(GstObject*, Side);

@@ -84,10 +84,10 @@ void GStreamerIncomingTrackProcessor::configure(ThreadSafeWeakPtr<GStreamerMedia
 
     g_object_get(m_pad.get(), "transceiver", &m_data.transceiver.outPtr(), nullptr);
 
-    if (m_data.type == RealtimeMediaSource::Type::Audio) {
+    {
         GRefPtr<GstWebRTCRTPReceiver> receiver;
         g_object_get(m_data.transceiver.get(), "receiver", &receiver.outPtr(), nullptr);
-        GStreamerRtpTransformBackend::installAudioTransform(m_pad.get(), GST_OBJECT(receiver.get()));
+        GStreamerRtpTransformBackend::installTransform(m_pad.get(), GST_OBJECT(receiver.get()));
     }
 
     auto msIdAttribute = gstStructureGetString(structure, "a-msid"_s);

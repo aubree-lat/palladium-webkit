@@ -119,7 +119,8 @@ static Ref<GStreamerRtpTransformState> stateFor(GstObject* object)
     Locker locker { creationLock.get() };
     auto* state = static_cast<GStreamerRtpTransformState*>(g_object_get_data(G_OBJECT(object), "palladium-opus-transform"));
     if (!state) {
-        state = new GStreamerRtpTransformState;
+        Ref created = adoptRef(*new GStreamerRtpTransformState);
+        state = &created.leakRef();
         g_object_set_data_full(G_OBJECT(object), "palladium-opus-transform", state, [](gpointer data) {
             static_cast<GStreamerRtpTransformState*>(data)->deref();
         });
@@ -189,11 +190,10 @@ void GStreamerRtpTransformBackend::processTransformedFrame(RTCRtpTransformableFr
     });
 }
 
-void GStreamerRtpTransformBackend::installAudioTransform(GstPad* pad, GstObject* object)
+void GStreamerRtpTransformBackend::installTransform(GstPad* pad, GstObject* object)
 {
     if (!pad || !object || g_object_get_data(G_OBJECT(pad), "palladium-opus-probe"))
         return;
-    g_object_set_data(G_OBJECT(object), "palladium-audio", GINT_TO_POINTER(1));
     g_object_set_data(G_OBJECT(pad), "palladium-opus-probe", GINT_TO_POINTER(1));
     auto state = stateFor(object);
     gst_pad_add_probe(pad, static_cast<GstPadProbeType>(GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST), [](GstPad* pad, GstPadProbeInfo* info, gpointer data) -> GstPadProbeReturn {

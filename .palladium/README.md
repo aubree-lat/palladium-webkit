@@ -5,7 +5,7 @@ Palladium's Linux runtime, based on WebKitGTK 2.54.1. This branch keeps a small 
 ## Changes
 
 - Incoming tracks become ready independently of silent or delayed participants. Repeated track-ready notifications are ignored.
-- Opus RTP payloads pass through encoded-transform workers on both sender and receiver. RTP identity and timing metadata are retained, changed payload sizes are supported, output is ordered on a serial queue, and queued frames are bounded. Closing a transform worker does not silently resume plaintext transmission. This is an initial audio implementation; encrypted video is not implemented.
+- Opus RTP payloads pass through encoded-transform workers on both sender and receiver. RTP identity and timing metadata are retained, changed payload sizes are supported, output is ordered on a serial queue, and queued frames are bounded. Closing a transform worker does not silently resume plaintext transmission. This is an initial audio implementation; encrypted video is not implemented and its payloads are blocked while a transform is attached.
 - Device refresh clears stale speaker entries, and default-device changes emit device-change notifications.
 - Display capture can request system audio; monitor devices stay out of normal microphone selection. Portal and PipeWire support remain enabled.
 - Palladium can request a native memory-pressure release. Large Function.toString results are returned normally without keeping an extra long-lived cached copy.
@@ -37,6 +37,6 @@ Palladium app builds should download an explicitly pinned runtime release and ch
 
 ## Updating upstream
 
-Update `.palladium/pins.env`, rebase the native patches onto the matching tag, update version pins in the build/verification scripts, and run the source and native gates. Keep the Opus bridge separate from other changes: upstream is replacing the GStreamer WebRTC backend with LibWebRTC, and this bridge should be retired when the upstream backend passes Palladium's probes.
+Update `.palladium/pins.env`, rebase the native patches onto the matching tag, update version pins in the build/verification scripts, run `bash .palladium/scripts/refresh-patch.sh`, and run the source and native gates. CI checks that the exported patch recreates the tracked native source files exactly. Keep the Opus bridge separate from other changes: upstream is replacing the GStreamer WebRTC backend with LibWebRTC, and this bridge should be retired when the upstream backend passes Palladium's probes.
 
 Source: https://webkitgtk.org/releases/webkitgtk-2.54.1.tar.xz plus the release's `palladium-source.patch`. The corresponding build scripts live on the release's source commit. Upstream and Rice licenses are included in the runtime; downstream edits retain the licenses of the files they modify.
