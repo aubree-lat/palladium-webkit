@@ -118,6 +118,7 @@ jobs:
         run: |
           rm -f .palladium/state/result
           docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+            --security-opt systempaths=unconfined \
             -v "$GITHUB_WORKSPACE:/work" -w /work \
             -e PALLADIUM_CI_DEADLINE -e PALLADIUM_HOST_OWNER="$(id -u):$(id -g)" \
             "$ARCH_IMAGE" bash .palladium/scripts/ci-build.sh
