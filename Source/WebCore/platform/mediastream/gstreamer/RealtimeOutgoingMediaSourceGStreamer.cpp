@@ -23,6 +23,7 @@
 #if USE(GSTREAMER_WEBRTC)
 
 #include "GStreamerCommon.h"
+#include "GStreamerRtpTransformBackend.h"
 #include "GStreamerMediaStreamSource.h"
 #include "MediaStreamTrack.h"
 
@@ -276,6 +277,11 @@ void RealtimeOutgoingMediaSourceGStreamer::setSinkPad(GRefPtr<GstPad>&& pad)
         source->codecPreferencesChanged();
     }), this);
     g_object_get(m_transceiver.get(), "sender", &m_sender.outPtr(), nullptr);
+
+    if (m_type == Type::Audio) {
+        GRefPtr srcPad = adoptGRef(gst_element_get_static_pad(m_bin.get(), "src"));
+        GStreamerRtpTransformBackend::installAudioTransform(srcPad.get(), GST_OBJECT(m_sender.get()));
+    }
 
     checkMid();
     g_signal_connect_swapped(m_transceiver.get(), "notify::mid", G_CALLBACK(+[](RealtimeOutgoingMediaSourceGStreamer* source) {

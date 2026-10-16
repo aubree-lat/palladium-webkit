@@ -216,8 +216,27 @@ void RealtimeMediaSourceCenter::triggerDevicesChangedObservers()
     });
 }
 
-void RealtimeMediaSourceCenter::getDisplayMediaDevices(const MediaStreamRequest& request, MediaDeviceHashSalts&& hashSalts, Vector<DeviceInfo>& displayDeviceInfo, MediaConstraintType& firstInvalidConstraint)
+void RealtimeMediaSourceCenter::getDisplayMediaDevices(const MediaStreamRequest& request, MediaDeviceHashSalts&& hashSalts, Vector<DeviceInfo>& audioDeviceInfo, Vector<DeviceInfo>& displayDeviceInfo, MediaConstraintType& firstInvalidConstraint)
 {
+    if (request.audioConstraints.isValid) {
+        for (auto& device : audioCaptureFactory().audioCaptureDeviceManager().captureDevices()) {
+            if (!device.enabled() || device.type() != CaptureDevice::DeviceType::SystemAudio)
+                continue;
+
+            auto sourceOrError = audioCaptureFactory().createAudioCaptureSource(device, MediaDeviceHashSalts { hashSalts }, &request.audioConstraints, request.pageIdentifier);
+            if (!sourceOrError)
+                continue;
+
+            if (auto invalidConstraint = RefPtr { sourceOrError.captureSource }->hasAnyInvalidConstraint(request.audioConstraints)) {
+                if (firstInvalidConstraint == MediaConstraintType::Unknown)
+                    firstInvalidConstraint = *invalidConstraint;
+                continue;
+            }
+
+            audioDeviceInfo.append({ sourceOrError.captureSource->fitnessScore(), device });
+        }
+    }
+
     if (!request.videoConstraints.isValid)
         return;
 
@@ -246,6 +265,8 @@ void RealtimeMediaSourceCenter::getUserMediaDevices(const MediaStreamRequest& re
         std::optional<double> fitnessScore;
         for (auto& device : audioCaptureFactory().audioCaptureDeviceManager().captureDevices()) {
             if (!device.enabled() || device.isSpeakerDevice())
+                continue;
+            if (device.type() != CaptureDevice::DeviceType::Microphone)
                 continue;
 
             auto sourceOrError = audioCaptureFactory().createAudioCaptureSource(device, MediaDeviceHashSalts { hashSalts }, { }, request.pageIdentifier);
@@ -333,7 +354,7 @@ Expected<RealtimeMediaSourceCenter::ValidDevices, MediaConstraintType> RealtimeM
 
     auto& displayCaptureManager = displayCaptureFactory().displayCaptureDeviceManager();
     if (displayCaptureManager.requiresCaptureDevicesEnumeration() && (request.type == MediaStreamRequest::Type::DisplayMedia || request.type == MediaStreamRequest::Type::DisplayMediaWithAudio))
-        getDisplayMediaDevices(request, MediaDeviceHashSalts { deviceIdentifierHashSalts }, videoDeviceInfo, firstInvalidConstraint);
+        getDisplayMediaDevices(request, MediaDeviceHashSalts { deviceIdentifierHashSalts }, audioDeviceInfo, videoDeviceInfo, firstInvalidConstraint);
     else
         getUserMediaDevices(request, MediaDeviceHashSalts { deviceIdentifierHashSalts }, audioDeviceInfo, videoDeviceInfo, firstInvalidConstraint);
 

@@ -140,6 +140,9 @@ Ref<RealtimeMediaSource> GStreamerRtpReceiverBackend::createSource(const String&
 
 Ref<RTCRtpTransformBackend> GStreamerRtpReceiverBackend::rtcRtpTransformBackend()
 {
+    GstWebRTCKind kind;
+    g_object_get(m_rtcTransceiver.get(), "kind", &kind, nullptr);
+    g_object_set_data(G_OBJECT(m_rtcReceiver.get()), "palladium-audio", GINT_TO_POINTER(kind == GST_WEBRTC_KIND_AUDIO));
     return GStreamerRtpReceiverTransformBackend::create(m_rtcReceiver);
 }
 

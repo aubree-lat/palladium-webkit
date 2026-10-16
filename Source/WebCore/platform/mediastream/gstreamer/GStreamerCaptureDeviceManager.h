@@ -87,7 +87,7 @@ class GStreamerAudioCaptureDeviceManager final : public GStreamerCaptureDeviceMa
     friend class NeverDestroyed<GStreamerAudioCaptureDeviceManager>;
 public:
     static GStreamerAudioCaptureDeviceManager& singleton();
-    const OptionSet<CaptureDevice::DeviceType> deviceTypes() const final { return { CaptureDevice::DeviceType::Microphone, CaptureDevice::DeviceType::Speaker }; }
+    const OptionSet<CaptureDevice::DeviceType> deviceTypes() const final { return { CaptureDevice::DeviceType::Microphone, CaptureDevice::DeviceType::Speaker, CaptureDevice::DeviceType::SystemAudio }; }
 
     // ref() and deref() do nothing because this object is a singleton.
     void ref() const final { }

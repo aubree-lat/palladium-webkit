@@ -294,6 +294,7 @@ std::unique_ptr<RTCDTMFSenderBackend> GStreamerRtpSenderBackend::createDTMFBacke
 
 Ref<RTCRtpTransformBackend> GStreamerRtpSenderBackend::rtcRtpTransformBackend()
 {
+    g_object_set_data(G_OBJECT(m_rtcSender.get()), "palladium-audio", GINT_TO_POINTER(!!audioSource()));
     return GStreamerRtpSenderTransformBackend::create(m_rtcSender);
 }
 

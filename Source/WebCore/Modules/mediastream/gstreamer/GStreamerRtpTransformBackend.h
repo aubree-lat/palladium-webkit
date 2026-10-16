@@ -22,17 +22,24 @@
 #if ENABLE(WEB_RTC) && USE(GSTREAMER_WEBRTC)
 
 #include "RTCRtpTransformBackend.h"
+#include "GRefPtrGStreamer.h"
 #include <wtf/Lock.h>
 
 namespace WebCore {
 
+class GStreamerRtpTransformState;
+
 class GStreamerRtpTransformBackend : public RTCRtpTransformBackend {
+public:
+    ~GStreamerRtpTransformBackend();
+    static void installAudioTransform(GstPad*, GstObject*);
+
 protected:
-    GStreamerRtpTransformBackend(MediaType, Side);
+    GStreamerRtpTransformBackend(GstObject*, Side);
     void setInputCallback(Callback&&);
 
 protected:
-    MediaType mediaType() const final { return m_mediaType; }
+    MediaType mediaType() const final;
 
 private:
     // RTCRtpTransformBackend
@@ -40,19 +47,10 @@ private:
     void clearTransformableFrameCallback() final;
     Side side() const final { return m_side; }
 
-    MediaType m_mediaType;
     Side m_side;
-
-    Lock m_inputCallbackLock;
-    Callback m_inputCallback;
-
+    Ref<GStreamerRtpTransformState> m_state;
+    bool m_isAudio;
 };
-
-inline GStreamerRtpTransformBackend::GStreamerRtpTransformBackend(MediaType mediaType, Side side)
-    : m_mediaType(mediaType)
-    , m_side(side)
-{
-}
 
 } // namespace WebCore
 

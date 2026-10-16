@@ -47,6 +47,10 @@
 #include <gst/webrtc/webrtc.h>
 #undef GST_USE_UNSTABLE_API
 
+extern "C" GQuark webkitGstWebRTCErrorQuark(void) __asm__("gst_webrtc_error_quark");
+#undef GST_WEBRTC_ERROR
+#define GST_WEBRTC_ERROR webkitGstWebRTCErrorQuark()
+
 #include <wtf/TZoneMalloc.h>
 #include <wtf/ThreadSafeRefCounted.h>
 

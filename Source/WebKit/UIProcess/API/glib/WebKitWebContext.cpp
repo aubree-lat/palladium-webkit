@@ -2049,3 +2049,13 @@ WebKitWebView* webkitWebContextGetWebViewForPage(WebKitWebContext* context, WebP
 {
     return page ? context->priv->webViews.get(page->identifier()) : nullptr;
 }
+
+extern "C" WEBKIT_API void webkit_web_context_palladium_release_memory(WebKitWebContext*, gboolean);
+
+void webkit_web_context_palladium_release_memory(WebKitWebContext* context, gboolean critical)
+{
+    g_return_if_fail(WEBKIT_IS_WEB_CONTEXT(context));
+#if OS(LINUX) && !OS(ANDROID)
+    context->priv->processPool->sendMemoryPressureEvent(critical);
+#endif
+}

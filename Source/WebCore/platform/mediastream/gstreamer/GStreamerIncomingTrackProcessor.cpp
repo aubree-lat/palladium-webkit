@@ -22,6 +22,7 @@
 #if USE(GSTREAMER_WEBRTC)
 
 #include "GStreamerCommon.h"
+#include "GStreamerRtpTransformBackend.h"
 #include "GStreamerQuirks.h"
 #include "GStreamerRegistryScanner.h"
 #include "VideoFrameMetadataGStreamer.h"
@@ -82,6 +83,12 @@ void GStreamerIncomingTrackProcessor::configure(ThreadSafeWeakPtr<GStreamerMedia
     m_bin = gst_bin_new(m_data.mediaStreamBinName.ascii().data());
 
     g_object_get(m_pad.get(), "transceiver", &m_data.transceiver.outPtr(), nullptr);
+
+    if (m_data.type == RealtimeMediaSource::Type::Audio) {
+        GRefPtr<GstWebRTCRTPReceiver> receiver;
+        g_object_get(m_data.transceiver.get(), "receiver", &receiver.outPtr(), nullptr);
+        GStreamerRtpTransformBackend::installAudioTransform(m_pad.get(), GST_OBJECT(receiver.get()));
+    }
 
     auto msIdAttribute = gstStructureGetString(structure, "a-msid"_s);
     if (!msIdAttribute.isEmpty()) {
@@ -408,6 +415,8 @@ void GStreamerIncomingTrackProcessor::installRtpBufferPadProbe(const GRefPtr<Gst
 
 void GStreamerIncomingTrackProcessor::trackReady()
 {
+    if (m_isReady)
+        return;
     auto endPoint = m_endPoint.get();
     if (!endPoint || endPoint->isStopped())
         return;

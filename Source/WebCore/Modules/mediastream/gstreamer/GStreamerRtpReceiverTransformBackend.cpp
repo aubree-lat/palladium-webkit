@@ -26,14 +26,8 @@
 
 namespace WebCore {
 
-static inline GStreamerRtpReceiverTransformBackend::MediaType mediaTypeFromReceiver(GstWebRTCRTPReceiver*)
-{
-    notImplemented();
-    return RTCRtpTransformBackend::MediaType::Video;
-}
-
 GStreamerRtpReceiverTransformBackend::GStreamerRtpReceiverTransformBackend(const GRefPtr<GstWebRTCRTPReceiver>& rtcReceiver)
-    : GStreamerRtpTransformBackend(mediaTypeFromReceiver(rtcReceiver.get()), Side::Receiver)
+    : GStreamerRtpTransformBackend(GST_OBJECT(rtcReceiver.get()), Side::Receiver)
     , m_rtcReceiver(rtcReceiver)
 {
 }
@@ -43,7 +37,6 @@ GStreamerRtpReceiverTransformBackend::~GStreamerRtpReceiverTransformBackend() = 
 void GStreamerRtpReceiverTransformBackend::setTransformableFrameCallback(Callback&& callback)
 {
     setInputCallback(WTF::move(callback));
-    notImplemented();
 }
 
 bool GStreamerRtpReceiverTransformBackend::requestKeyFrame(const String&)

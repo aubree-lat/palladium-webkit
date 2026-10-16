@@ -1603,40 +1603,11 @@ void GStreamerMediaEndpoint::connectIncomingTrack(WebRTCTrackData& data)
             return;
     }
 
-    m_pendingIncomingTracks.append(&track.privateTrack());
-
-    unsigned totalExpectedMediaTracks = 0;
-    forEachTransceiver(m_webrtcBin, [&](auto&& transceiver) -> bool {
-        GstWebRTCRTPTransceiverDirection direction;
-        g_object_get(transceiver.get(), "current-direction", &direction, nullptr);
-        switch (direction) {
-        case GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_NONE:
-        case GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_INACTIVE:
-        case GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY:
-            break;
-        case GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_RECVONLY:
-        case GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV:
-            totalExpectedMediaTracks++;
-            break;
-        }
-        return false;
-    });
-
-    GST_DEBUG_OBJECT(m_pipeline.get(), "Expecting %u media tracks", totalExpectedMediaTracks);
-    if (m_pendingIncomingTracks.size() < totalExpectedMediaTracks) {
-        GST_DEBUG_OBJECT(m_pipeline.get(), "Only %zu track(s) received so far", m_pendingIncomingTracks.size());
-        return;
-    }
-
     GST_DEBUG_OBJECT(m_pipeline.get(), "Incoming stream %s ready, notifying observers", data.mediaStreamId.ascii().data());
-    for (auto& track : m_pendingIncomingTracks) {
-        GST_DEBUG_OBJECT(m_pipeline.get(), "Incoming stream has track %s", track->id().utf8().data());
-        ALWAYS_LOG(LOGIDENTIFIER, "Data flow started on track "_s, track->id());
-        track->dataFlowStarted();
-        track->source().setMuted(false);
-    }
+    ALWAYS_LOG(LOGIDENTIFIER, "Data flow started on track "_s, track.id());
+    track.privateTrack().dataFlowStarted();
+    source.setMuted(false);
 
-    m_pendingIncomingTracks.clear();
     gst_element_set_state(m_pipeline.get(), GST_STATE_PLAYING);
 }
 

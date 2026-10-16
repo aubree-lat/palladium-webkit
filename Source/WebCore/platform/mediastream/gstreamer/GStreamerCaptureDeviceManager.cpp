@@ -113,6 +113,7 @@ void GStreamerCaptureDeviceManager::teardown()
     m_capturers.clear();
     RealtimeMediaSourceCenter::singleton().removeDevicesChangedObserver(*this);
     m_devices.clear();
+    m_speakerDevices.clear();
     m_gstreamerDevices.clear();
 }
 
@@ -199,14 +200,15 @@ const Vector<CaptureDevice>& GStreamerCaptureDeviceManager::speakerDevices()
 std::optional<GStreamerCaptureDevice> GStreamerCaptureDeviceManager::captureDeviceFromGstDevice(GRefPtr<GstDevice>&& device)
 {
     GUniquePtr<GstStructure> properties(gst_device_get_properties(device.get()));
-    auto deviceClassFromProperties = gstStructureGetString(properties.get(), "device.class"_s);
-    if (deviceClassFromProperties == "monitor"_s)
-        return { };
-
     auto types = deviceTypes();
+    auto deviceClassFromProperties = gstStructureGetString(properties.get(), "device.class"_s);
     auto deviceClass = GMallocString::unsafeAdoptFromUTF8(gst_device_get_device_class(device.get()));
     CaptureDevice::DeviceType type;
-    if (startsWith(deviceClass.span(), "Audio"_s)) {
+    if (deviceClassFromProperties == "monitor"_s) {
+        if (!types.contains(CaptureDevice::DeviceType::SystemAudio))
+            return { };
+        type = CaptureDevice::DeviceType::SystemAudio;
+    } else if (startsWith(deviceClass.span(), "Audio"_s)) {
         if (types.contains(CaptureDevice::DeviceType::Microphone) && endsWith(deviceClass.span(), "Source"_s))
             type = CaptureDevice::DeviceType::Microphone;
         else if (types.contains(CaptureDevice::DeviceType::Speaker) && endsWith(deviceClass.span(), "Sink"_s))
@@ -399,6 +401,7 @@ void GStreamerCaptureDeviceManager::refreshCaptureDevices()
             GST_INFO_OBJECT(GST_MESSAGE_SRC(message), "Device changed: %s", name.utf8());
 #endif
             manager->updateDevice(WTF::move(device), WTF::move(oldDevice));
+            manager->deviceChanged();
             break;
         }
         default:

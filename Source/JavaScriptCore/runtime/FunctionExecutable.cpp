@@ -174,6 +174,8 @@ JSString* FunctionExecutable::toStringSlow(JSGlobalObject* globalObject)
     auto throwScope = DECLARE_THROW_SCOPE(vm);
 
     const auto& cache = [&](JSString* asString) {
+        if (asString->length() >= 16 * 1024)
+            return asString;
         WTF::storeStoreFence();
         m_rareData->m_asString.set(vm, this, asString);
         return asString;

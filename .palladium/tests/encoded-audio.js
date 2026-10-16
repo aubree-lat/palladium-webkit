@@ -1,0 +1,101 @@
+const left = new RTCPeerConnection();
+const right = new RTCPeerConnection();
+const audio = new AudioContext();
+const oscillator = audio.createOscillator();
+const output = audio.createMediaStreamDestination();
+const analyser = audio.createAnalyser();
+oscillator.connect(output);
+oscillator.start();
+await audio.resume();
+let receivedTrack = false;
+let receiverSource;
+let candidateError = null;
+const leftQueue = [];
+const rightQueue = [];
+function route(candidate, destination, queue) {
+  if (!candidate) return;
+  if (destination.remoteDescription) destination.addIceCandidate(candidate).catch(e => candidateError = e.name);
+  else queue.push(candidate);
+}
+left.onicecandidate = event => route(event.candidate, right, rightQueue);
+right.onicecandidate = event => route(event.candidate, left, leftQueue);
+const workers = [];
+const counts = { encrypt: 0, decrypt: 0 };
+const failures = [];
+const workerText = `self.onrtctransform = async event => {
+  const { readable, writable, options } = event.transformer;
+  let count = 0;
+  let sequence = 0;
+  try {
+    // Fixed key for this synthetic CI test only. No Discord keys are used.
+    const key = await crypto.subtle.importKey('raw', new Uint8Array(32).fill(41), 'AES-GCM', false, ['encrypt', 'decrypt']);
+    await readable.pipeThrough(new TransformStream({async transform(frame, controller) {
+      if (frame.constructor.name !== 'RTCEncodedAudioFrame') throw new Error('incorrect frame type');
+      const metadata = frame.getMetadata();
+      if (metadata.synchronizationSource === undefined || metadata.rtpTimestamp === undefined) throw new Error('missing RTP metadata');
+      if (options.operation === 'encrypt') {
+        const iv = new Uint8Array(12);
+        new DataView(iv.buffer).setUint32(8, ++sequence);
+        const cipher = new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv}, key, frame.data));
+        const wire = new Uint8Array(iv.length + cipher.length);
+        wire.set(iv); wire.set(cipher, iv.length); frame.data = wire.buffer;
+      } else {
+        const wire = new Uint8Array(frame.data);
+        frame.data = await crypto.subtle.decrypt({name:'AES-GCM',iv:wire.slice(0,12)}, key, wire.slice(12));
+      }
+      controller.enqueue(frame);
+      if (++count % 10 === 0) self.postMessage({operation:options.operation,count});
+    }})).pipeTo(writable);
+  } catch (e) { self.postMessage({error:e.name+': '+e.message}); }
+};`;
+const workerUrl = URL.createObjectURL(new Blob([workerText], {type:'text/javascript'}));
+function transform(endpoint, operation) {
+  const worker = new Worker(workerUrl);
+  worker.onmessage = event => {
+    if (event.data.error) failures.push(event.data.error);
+    else counts[event.data.operation] = event.data.count;
+  };
+  workers.push(worker);
+  endpoint.transform = new RTCRtpScriptTransform(worker, {operation});
+}
+right.ontrack = event => {
+  transform(event.receiver, 'decrypt');
+  receivedTrack = true;
+  receiverSource = audio.createMediaStreamSource(new MediaStream([event.track]));
+  receiverSource.connect(analyser);
+};
+const sender = left.addTrack(output.stream.getAudioTracks()[0], output.stream);
+
+
+transform(sender, 'encrypt');
+try {
+  for (let iteration = 0; iteration < 2; iteration++) {
+    const offer = await left.createOffer();
+    await left.setLocalDescription(offer);
+    await right.setRemoteDescription(offer);
+    for (const candidate of rightQueue.splice(0)) await right.addIceCandidate(candidate);
+    const answer = await right.createAnswer();
+    await right.setLocalDescription(answer);
+    await left.setRemoteDescription(answer);
+    for (const candidate of leftQueue.splice(0)) await left.addIceCandidate(candidate);
+  }
+  let energy = 0;
+  let inbound = [];
+  for (let attempt = 0; attempt < 40; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const samples = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(samples);
+    energy = samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length;
+    inbound = Array.from((await right.getStats()).values()).filter(s => s.type === 'inbound-rtp').map(s => ({kind:s.kind, bytes:s.bytesReceived, packets:s.packetsReceived}));
+    if (energy > 0.01 && counts.encrypt >= 10 && counts.decrypt >= 10) break;
+  }
+  return {ok:energy > 0.01 && receivedTrack && !candidateError && counts.encrypt >= 10 && counts.decrypt >= 10 && !failures.length, counts, failures, receivedTrack, energy, inbound, candidateError, states:[left.connectionState,right.connectionState], mids:left.getTransceivers().map(t => t.mid)};
+} finally {
+  workers.forEach(worker => worker.terminate());
+  URL.revokeObjectURL(workerUrl);
+  oscillator.stop();
+  output.stream.getTracks().forEach(track => track.stop());
+  left.close();
+  right.close();
+  await audio.close();
+}

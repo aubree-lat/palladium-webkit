@@ -302,6 +302,14 @@ void MediaDevices::getDisplayMedia(DisplayMediaStreamConstraints&& constraints, 
         return;
     }
 
+    auto audioConstraints = createMediaConstraints(constraints.audio);
+    auto requestType = MediaStreamRequest::Type::DisplayMedia;
+#if USE(GLIB)
+    if (audioConstraints.isValid) {
+        audioConstraints.setDefaultAudioConstraints();
+        requestType = MediaStreamRequest::Type::DisplayMediaWithAudio;
+    }
+#endif
     auto videoConstraints = createMediaConstraints(constraints.video);
     if (hasInvalidGetDisplayMediaConstraint(videoConstraints)) {
         promise.reject(Exception { ExceptionCode::TypeError, "getDisplayMedia must be called with valid constraints."_s });
@@ -314,7 +322,7 @@ void MediaDevices::getDisplayMedia(DisplayMediaStreamConstraints&& constraints, 
         return;
     }
 
-    auto request = UserMediaRequest::create(*document, { MediaStreamRequest::Type::DisplayMedia, { }, WTF::move(videoConstraints), isUserGesturePriviledged, *document->pageID() }, WTF::move(constraints.audio), WTF::move(constraints.video), WTF::move(promise));
+    auto request = UserMediaRequest::create(*document, { requestType, WTF::move(audioConstraints), WTF::move(videoConstraints), isUserGesturePriviledged, *document->pageID() }, WTF::move(constraints.audio), WTF::move(constraints.video), WTF::move(promise));
     request->start();
 }
 
