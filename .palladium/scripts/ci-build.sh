@@ -23,6 +23,7 @@ if [ "$(id -u)" = 0 ]; then
 fi
 
 export PATH="$HOME/.cargo/bin:$PATH"
+bwrap --ro-bind / / --unshare-user --unshare-pid --proc /proc -- /usr/bin/true
 rustup default stable
 export WEBKIT_PREFIX=$HOME/.local/share/palladium/webkit-$WEBKIT_VERSION
 export WEBKIT_SRC=$HOME/.cache/palladium/webkit-build

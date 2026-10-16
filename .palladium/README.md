@@ -16,7 +16,7 @@ Palladium's Linux runtime, based on WebKitGTK 2.54.1. This branch keeps a small 
 
 Clang, Ninja unified builds, `-O2`, lld, ccache (2 GiB maximum), no LTO or debug symbols. Both X11 and Wayland, sandboxing, Skia/GPU acceleration, JavaScript JIT, WebAssembly, WebAudio, WebRTC, media recording, accessibility, spellcheck, WOFF2 and AVIF remain available.
 
-Disabled: documentation, MiniBrowser, WebDriver, PDF.js, gamepad, speech synthesis, MHTML archives, native content filters, native browser extensions, WebXR, WebGPU and Vulkan. Some are already disabled upstream; pinning them prevents accidental expansion. Palladium uses injected JavaScript mods rather than native WebKit extension/content-filter APIs.
+Disabled: documentation, MiniBrowser, WebDriver, PDF.js, gamepad, speech synthesis, MHTML archives, native content filters, native browser extensions, WebXR, WebGPU, Vulkan and Sysprof capture integration. Some are already disabled upstream; pinning them prevents accidental expansion. Palladium uses injected JavaScript mods rather than native WebKit extension/content-filter APIs.
 
 GObject introspection stays enabled for the native Python probes. Full WebKit development test suites are not compiled by this profile.
 
