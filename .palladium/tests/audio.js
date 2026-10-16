@@ -1,3 +1,6 @@
+const rounds = [];
+for (let round = 0; round < 2; round++) {
+  rounds.push(await (async function () {
 const left = new RTCPeerConnection();
 const right = new RTCPeerConnection();
 const audio = new AudioContext();
@@ -56,3 +59,7 @@ try {
   right.close();
   await audio.close();
 }
+
+  })());
+}
+return {ok:rounds.every(round=>round.ok),rounds};

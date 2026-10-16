@@ -6,6 +6,8 @@ Palladium's Linux runtime, based on WebKitGTK 2.54.1. This branch keeps a small 
 
 - Incoming tracks become ready independently of silent or delayed participants. Repeated track-ready notifications are ignored.
 - Opus RTP payloads pass through encoded-transform workers on both sender and receiver. RTP identity and timing metadata are retained, changed payload sizes are supported, output is ordered on a serial queue, and queued frames are bounded. Closing a transform worker does not silently resume plaintext transmission. This is an initial audio implementation; encrypted video is not implemented and its payloads are blocked while a transform is attached.
+- Explicit Unix PulseAudio server addresses no longer trip a sandbox-launcher string assertion.
+- GTK speaker enumeration and asynchronous output selection are enabled for Palladium, allowing Discord to restore a selected device without a fresh gesture. Permission policies remain enforced.
 - Device refresh clears stale speaker entries, and default-device changes emit device-change notifications.
 - Display capture can request system audio; monitor devices stay out of normal microphone selection. Portal and PipeWire support remain enabled.
 - Palladium can request a native memory-pressure release. Large Function.toString results are returned normally without keeping an extra long-lived cached copy.
@@ -24,10 +26,11 @@ GObject introspection stays enabled for the native Python probes. Full WebKit de
 
 Compiled objects and the private prefix survive between runs. The Rust toolchain and Cargo dependency build trees are not part of the checkpoint cache. A job checkpoints before the hosted-runner deadline and automatically queues the next attempt, up to six attempts. Compilation failures stop the workflow. No runtime is published until the sandboxed native probes pass:
 
-1. Decoded synthetic Opus audio with multiple transceivers and renegotiation.
-2. AES-GCM worker encryption/decryption, including changed payload lengths, metadata and worker progress checks.
-3. An audible first participant alongside a worker that drops all frames, followed by the delayed participant becoming audible.
-4. Microphone capture, explicit output switching, and device add/default-change/remove notifications using isolated virtual devices.
+1. PNG, JPEG, GIF, WebP and AVIF decoding.
+2. Decoded synthetic Opus audio with multiple transceivers and renegotiation.
+3. AES-GCM worker encryption/decryption, including changed payload lengths, metadata and worker progress checks.
+4. An audible first participant alongside a worker that drops all frames, followed by the delayed participant becoming audible.
+5. Microphone capture, explicit output switching, and device add/default-change/remove notifications using isolated virtual devices.
 
 Tests use generated tones and an isolated PipeWire null sink, never a user's microphone or speakers. Native probes verify an offline media path, not Discord's DAVE protocol. Real two-party Discord calls, physical headset hotplug, and interactive screen sharing still require manual validation. Releases are prereleases until that validation is complete.
 

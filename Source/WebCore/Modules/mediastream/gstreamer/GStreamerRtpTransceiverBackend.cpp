@@ -49,6 +49,12 @@ GStreamerRtpTransceiverBackend::GStreamerRtpTransceiverBackend(GRefPtr<GstWebRTC
     GstWebRTCKind kind;
     g_object_get(m_rtcTransceiver.get(), "kind", &kind, nullptr);
 
+    GRefPtr<GstWebRTCRTPSender> sender;
+    GRefPtr<GstWebRTCRTPReceiver> receiver;
+    g_object_get(m_rtcTransceiver.get(), "sender", &sender.outPtr(), "receiver", &receiver.outPtr(), nullptr);
+    g_object_set_data(G_OBJECT(sender.get()), "palladium-audio", GINT_TO_POINTER(kind == GST_WEBRTC_KIND_AUDIO));
+    g_object_set_data(G_OBJECT(receiver.get()), "palladium-audio", GINT_TO_POINTER(kind == GST_WEBRTC_KIND_AUDIO));
+
     // FIXME: The ulp/red encoders drop MID extension headers. See also:
     // https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/923
     // gst_util_set_object_arg(G_OBJECT(m_rtcTransceiver.get()), "fec-type", "ulp-red");

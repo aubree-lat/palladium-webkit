@@ -4,11 +4,12 @@ set -euo pipefail
 if [ "${PALLADIUM_TEST_SESSION:-0}" != 1 ]; then
   export XDG_RUNTIME_DIR
   XDG_RUNTIME_DIR=$(mktemp -d)
+  export XDG_DATA_HOME=$XDG_RUNTIME_DIR/data
   export XDG_CONFIG_HOME=$XDG_RUNTIME_DIR/config
   export XDG_STATE_HOME=$XDG_RUNTIME_DIR/state
   export XDG_CACHE_HOME=$XDG_RUNTIME_DIR/cache
   export GIO_USE_VFS=local
-  mkdir -p "$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d"
+  mkdir -p "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d"
   cat > "$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d/palladium-test.conf" <<'EOF'
 wireplumber.profiles = {
   main = {
@@ -22,7 +23,13 @@ wireplumber.profiles = {
   }
 }
 EOF
-  trap 'rm -rf "$XDG_RUNTIME_DIR"' EXIT
+  cleanup_session() {
+    for mount in doc gvfs; do
+      if mountpoint -q "$XDG_RUNTIME_DIR/$mount"; then fusermount3 -u "$XDG_RUNTIME_DIR/$mount" || true; fi
+    done
+    rm -rf --one-file-system "$XDG_RUNTIME_DIR"
+  }
+  trap cleanup_session EXIT
   dbus-run-session -- xvfb-run -a env PALLADIUM_TEST_SESSION=1 bash "$0" "$@"
   exit
 fi
@@ -63,9 +70,9 @@ for attempt in $(seq 1 40); do
   sleep 0.1
 done
 pactl set-default-source palladium-test-microphone
-probes=(audio encoded-audio staggered-audio devices)
+probes=(images audio encoded-audio staggered-audio devices)
 if [ "$#" -gt 0 ]; then probes=("$@"); fi
 for probe in "${probes[@]}"; do
-  case "$probe" in audio|encoded-audio|staggered-audio|devices) ;; *) exit 2 ;; esac
+  case "$probe" in images|audio|encoded-audio|staggered-audio|devices) ;; *) exit 2 ;; esac
   python3 .palladium/tests/probe.py ".palladium/tests/$probe.js" | tee "$log_dir/$probe.json"
 done

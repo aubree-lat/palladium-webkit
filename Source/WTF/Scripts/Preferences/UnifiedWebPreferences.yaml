@@ -3137,6 +3137,7 @@ ExposeSpeakersEnabled:
   defaultValue:
     WebKit:
       "PLATFORM(COCOA)": true
+      "PLATFORM(GTK)": true
       default: false
     WebCore:
       default: false
@@ -3151,6 +3152,7 @@ ExposeSpeakersWithoutMicrophoneEnabled:
   defaultValue:
     WebKit:
       "PLATFORM(COCOA)": true
+      "PLATFORM(GTK)": true
       default: false
     WebCore:
       default: false
@@ -8353,8 +8355,10 @@ SpeakerSelectionRequiresUserGesture:
     WebKitLegacy:
       default: true
     WebKit:
+      "PLATFORM(GTK)": false
       default: true
     WebCore:
+      "PLATFORM(GTK)": false
       default: true
 
 SpeculationRulesPrefetchEnabled:

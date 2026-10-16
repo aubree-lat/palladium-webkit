@@ -64,10 +64,11 @@ right.ontrack = event => {
   receiverSource = audio.createMediaStreamSource(new MediaStream([event.track]));
   receiverSource.connect(analyser);
 };
-const sender = left.addTrack(output.stream.getAudioTracks()[0], output.stream);
+const sender = left.addTransceiver("audio", {direction:"sendonly"}).sender;
 
 
 transform(sender, 'encrypt');
+await sender.replaceTrack(output.stream.getAudioTracks()[0]);
 try {
   for (let iteration = 0; iteration < 2; iteration++) {
     const offer = await left.createOffer();

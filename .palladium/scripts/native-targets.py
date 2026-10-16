@@ -4,9 +4,8 @@ from pathlib import Path
 import shlex
 import sys
 
-names = {"GStreamerRtpTransformBackend.cpp", "GStreamerRtpSenderTransformBackend.cpp",
-         "GStreamerRtpReceiverTransformBackend.cpp", "GStreamerIncomingTrackProcessor.cpp",
-         "RealtimeOutgoingMediaSourceGStreamer.cpp"}
+manifest = Path(__file__).resolve().parents[1] / "source-files.sha256"
+names = {Path(line.split(None, 1)[1]).name for line in manifest.read_text().splitlines() if line.endswith(".cpp")}
 targets = set()
 for entry in json.loads(Path(sys.argv[1]).read_text()):
     source = Path(entry["file"])

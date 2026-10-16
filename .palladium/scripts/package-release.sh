@@ -19,7 +19,8 @@ root = pathlib.Path(sys.argv[1])
 seconds = pathlib.Path(sys.argv[2])
 metrics = {'compileSeconds': int(seconds.read_text()) if seconds.exists() else None,
            'runtimeBytes': sum(p.stat().st_size for p in root.rglob('*') if p.is_file() and not p.is_symlink()),
-           'profile': 'clang-O2-unified-no-lto', 'manualDiscordCallValidated': False}
+           'profile': 'clang-O2-unified-no-lto', 'manualDiscordCallValidated': False,
+           'syntheticProbeMemory': {p.stem: json.loads(p.read_text()).get('processMemory') for p in root.glob('*.json')}}
 (root / 'build-metrics.json').write_text(json.dumps(metrics, indent=2) + '\n')
 PY
 (

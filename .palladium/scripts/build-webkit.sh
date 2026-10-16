@@ -33,7 +33,7 @@ detect_distro() {
 print_dependencies() {
   case "$(detect_distro)" in
     arch)
-      printf '%s\n' 'sudo pacman -S --needed base-devel bubblewrap ca-certificates ccache clang cmake curl enchant git glib2-devel gobject-introspection gperf gst-libav gst-plugin-pipewire gst-plugins-bad gst-plugins-base gst-plugins-good gtk3 harfbuzz-icu hyphen lcms2 libavif libportal-gtk3 libpulse libsecret libseccomp libtasn1 libwebp libxslt lld mesa ninja openssl patch pipewire pkgconf ruby ruby-erb rustup unifdef wayland-protocols woff2 xdg-dbus-proxy xdg-desktop-portal xdg-desktop-portal-gtk xz zstd'
+      printf '%s\n' 'sudo pacman -S --needed base-devel bubblewrap ca-certificates ccache clang cmake curl enchant git glib2-devel gobject-introspection gperf gst-libav gst-plugin-pipewire gst-plugins-bad gst-plugins-base gst-plugins-good gtk3 harfbuzz-icu hyphen lcms2 libavif libportal-gtk3 libpulse libsoup3 libsecret libseccomp libtasn1 libwebp libxslt lld mesa ninja openssl patch pipewire pkgconf ruby ruby-erb rustup unifdef wayland-protocols woff2 xdg-dbus-proxy xdg-desktop-portal xdg-desktop-portal-gtk xz zstd'
       ;;
     ubuntu)
       printf '%s\n' 'sudo apt update'

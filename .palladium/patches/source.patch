@@ -11,6 +11,37 @@ index 89ff4c17..6860a820 100644
          WTF::storeStoreFence();
          m_rareData->m_asString.set(vm, this, asString);
          return asString;
+diff --git a/Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml b/Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml
+index d67ec701..c2b6ef21 100644
+--- a/Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml
++++ b/Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml
+@@ -3137,6 +3137,7 @@ ExposeSpeakersEnabled:
+   defaultValue:
+     WebKit:
+       "PLATFORM(COCOA)": true
++      "PLATFORM(GTK)": true
+       default: false
+     WebCore:
+       default: false
+@@ -3151,6 +3152,7 @@ ExposeSpeakersWithoutMicrophoneEnabled:
+   defaultValue:
+     WebKit:
+       "PLATFORM(COCOA)": true
++      "PLATFORM(GTK)": true
+       default: false
+     WebCore:
+       default: false
+@@ -8353,8 +8355,10 @@ SpeakerSelectionRequiresUserGesture:
+     WebKitLegacy:
+       default: true
+     WebKit:
++      "PLATFORM(GTK)": false
+       default: true
+     WebCore:
++      "PLATFORM(GTK)": false
+       default: true
+ 
+ SpeculationRulesPrefetchEnabled:
 diff --git a/Source/WebCore/Modules/mediastream/MediaDevices.cpp b/Source/WebCore/Modules/mediastream/MediaDevices.cpp
 index af593956..a16740f0 100644
 --- a/Source/WebCore/Modules/mediastream/MediaDevices.cpp
@@ -142,14 +173,15 @@ index 6e4f1e5b..57cd502e 100644
  
  bool GStreamerRtpReceiverTransformBackend::requestKeyFrame(const String&)
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp
-index 7de865f8..08c7b3c6 100644
+index 7de865f8..637707bf 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp
 +++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp
-@@ -294,6 +294,7 @@ std::unique_ptr<RTCDTMFSenderBackend> GStreamerRtpSenderBackend::createDTMFBacke
+@@ -294,6 +294,8 @@ std::unique_ptr<RTCDTMFSenderBackend> GStreamerRtpSenderBackend::createDTMFBacke
  
  Ref<RTCRtpTransformBackend> GStreamerRtpSenderBackend::rtcRtpTransformBackend()
  {
-+    g_object_set_data(G_OBJECT(m_rtcSender.get()), "palladium-audio", GINT_TO_POINTER(!!audioSource()));
++    if (audioSource())
++        g_object_set_data(G_OBJECT(m_rtcSender.get()), "palladium-audio", GINT_TO_POINTER(1));
      return GStreamerRtpSenderTransformBackend::create(m_rtcSender);
  }
  
@@ -181,6 +213,23 @@ index eed2fca5..ad112878 100644
  }
  
  bool GStreamerRtpSenderTransformBackend::requestKeyFrame(const String&)
+diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransceiverBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransceiverBackend.cpp
+index 538d1f73..49ed62cf 100644
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransceiverBackend.cpp
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransceiverBackend.cpp
+@@ -49,6 +49,12 @@ GStreamerRtpTransceiverBackend::GStreamerRtpTransceiverBackend(GRefPtr<GstWebRTC
+     GstWebRTCKind kind;
+     g_object_get(m_rtcTransceiver.get(), "kind", &kind, nullptr);
+ 
++    GRefPtr<GstWebRTCRTPSender> sender;
++    GRefPtr<GstWebRTCRTPReceiver> receiver;
++    g_object_get(m_rtcTransceiver.get(), "sender", &sender.outPtr(), "receiver", &receiver.outPtr(), nullptr);
++    g_object_set_data(G_OBJECT(sender.get()), "palladium-audio", GINT_TO_POINTER(kind == GST_WEBRTC_KIND_AUDIO));
++    g_object_set_data(G_OBJECT(receiver.get()), "palladium-audio", GINT_TO_POINTER(kind == GST_WEBRTC_KIND_AUDIO));
++
+     // FIXME: The ulp/red encoders drop MID extension headers. See also:
+     // https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/923
+     // gst_util_set_object_arg(G_OBJECT(m_rtcTransceiver.get()), "fec-type", "ulp-red");
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
 index 2ec70d5b..7690c96c 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
@@ -661,3 +710,16 @@ index 549ee896..c1ced57f 100644
 +    context->priv->processPool->sendMemoryPressureEvent(critical);
 +#endif
 +}
+diff --git a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp b/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
+index 6afd0241..fbf1d980 100644
+--- a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
++++ b/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
+@@ -294,7 +294,7 @@ static void bindPulse(Vector<CString>& args)
+     if (pulseServer) {
+         auto pulseServerString = CStringView::unsafeFromUTF8(pulseServer);
+         if (startsWith(pulseServerString.span(), "unix:"_s))
+-            bindIfExists(args, CStringView::fromUTF8(pulseServerString.span().subspan(5)), BindFlags::ReadWrite);
++            bindIfExists(args, CStringView::unsafeFromUTF8(pulseServer + 5), BindFlags::ReadWrite);
+         // else it uses tcp
+     } else {
+         const char* runtimeDir = g_get_user_runtime_dir();

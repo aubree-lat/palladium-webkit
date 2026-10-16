@@ -3,6 +3,7 @@ const oscillator = context.createOscillator();
 const destination = context.createMediaStreamDestination();
 const element = new Audio();
 let microphone;
+let toneStarted=false;
 let changes = 0;
 navigator.mediaDevices.addEventListener('devicechange', () => changes++);
 async function wait(predicate, message) {
@@ -20,14 +21,17 @@ async function control(operation) {
   await wait(()=>window.__PALLADIUM_DEVICE_CONTROL__===operation,'device control timed out');
 }
 try {
+  document.title="WEBKIT_PROGRESS:capture";
   microphone=await navigator.mediaDevices.getUserMedia({audio:true});
   const input=microphone.getAudioTracks()[0];
   if(input.readyState!=='live')throw new Error('microphone capture did not start');
+  document.title="WEBKIT_PROGRESS:enumerate";
   const initial=await outputs();
   if(initial.length<2)throw new Error('two isolated output devices are required');
   if(typeof element.setSinkId!=='function')throw new Error('output selection unavailable');
-  oscillator.connect(destination);oscillator.start();await context.resume();
+  oscillator.connect(destination);oscillator.start();toneStarted=true;await context.resume();
   element.srcObject=destination.stream;
+  document.title="WEBKIT_PROGRESS:output-switch";
   await element.setSinkId(initial[0].deviceId);
   await element.play();
   await element.setSinkId(initial[1].deviceId);
@@ -46,5 +50,5 @@ try {
 } finally {
   if(microphone)microphone.getTracks().forEach(track=>track.stop());
   destination.stream.getTracks().forEach(track=>track.stop());
-  element.pause();element.srcObject=null;oscillator.stop();await context.close();
+  element.pause();element.srcObject=null;if(toneStarted)oscillator.stop();await context.close();
 }
