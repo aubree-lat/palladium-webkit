@@ -4,6 +4,9 @@ for (let round = 0; round < 2; round++) {
 const left = new RTCPeerConnection();
 const right = new RTCPeerConnection();
 const audio = new AudioContext();
+const playback = new Audio();
+let playbackError = null;
+let outputEnergy = null;
 const oscillator = audio.createOscillator();
 const output = audio.createMediaStreamDestination();
 const analyser = audio.createAnalyser();
@@ -24,6 +27,8 @@ left.onicecandidate = event => route(event.candidate, right, rightQueue);
 right.onicecandidate = event => route(event.candidate, left, leftQueue);
 right.ontrack = event => {
   receivedTrack = true;
+  playback.srcObject = new MediaStream([event.track]);
+  playback.play().catch(error => playbackError = error.name);
   receiverSource = audio.createMediaStreamSource(new MediaStream([event.track]));
   receiverSource.connect(analyser);
 };
@@ -51,8 +56,14 @@ try {
     inbound = Array.from((await right.getStats()).values()).filter(s => s.type === 'inbound-rtp').map(s => ({kind:s.kind, bytes:s.bytesReceived, packets:s.packetsReceived}));
     if (energy > 0.01 && inbound.some(s => s.packets > 10)) break;
   }
-  return {ok:energy > 0.01 && receivedTrack && !candidateError, receivedTrack, energy, inbound, candidateError, states:[left.connectionState,right.connectionState], mids:left.getTransceivers().map(t => t.mid)};
+  if (round === 0 && energy > 0.01) {
+    document.title='WEBKIT_CONTROL:measure-call';
+    for(let iteration=0;iteration<40 && window.__PALLADIUM_DEVICE_CONTROL__!=='measure-call';iteration++)await new Promise(resolve=>setTimeout(resolve,100));
+    outputEnergy=window.__PALLADIUM_OUTPUT_ENERGY__ || 0;
+  }
+  return {ok:energy > 0.01 && receivedTrack && !candidateError && !playbackError && (round !== 0 || outputEnergy>0.01), outputEnergy, playbackError, receivedTrack, energy, inbound, candidateError, states:[left.connectionState,right.connectionState], mids:left.getTransceivers().map(t => t.mid)};
 } finally {
+  playback.pause();playback.srcObject=null;
   oscillator.stop();
   output.stream.getTracks().forEach(track => track.stop());
   left.close();

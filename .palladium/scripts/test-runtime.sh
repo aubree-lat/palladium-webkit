@@ -57,10 +57,10 @@ for attempt in $(seq 1 40); do
 done
 if [ "$ready" != 1 ]; then cat "$log_dir/pipewire-pulse.log" >&2; exit 1; fi
 sleep 1
-pactl load-module module-null-sink sink_name=palladium-test
+pactl load-module module-null-sink sink_name=palladium-test sink_properties=device.description=Palladium_Test_First
 sleep 1
 pactl set-default-sink palladium-test
-pactl load-module module-null-sink sink_name=palladium-test-second
+pactl load-module module-null-sink sink_name=palladium-test-second sink_properties=device.description=Palladium_Test_Second
 pw-loopback -C palladium-test -i 'stream.capture.sink=true node.passive=true' \
   -o 'media.class=Audio/Source node.name=palladium-test-microphone node.description="Palladium test microphone"' \
   > "$log_dir/loopback.log" 2>&1 &

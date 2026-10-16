@@ -29,13 +29,19 @@ try {
   const initial=await outputs();
   if(initial.length<2)throw new Error('two isolated output devices are required');
   if(typeof element.setSinkId!=='function')throw new Error('output selection unavailable');
+  const firstOutput=initial.find(device=>device.deviceId!=='default' && device.label.includes('Palladium_Test_First'));
+  const secondOutput=initial.find(device=>device.deviceId!=='default' && device.label.includes('Palladium_Test_Second'));
+  if(!firstOutput || !secondOutput)throw new Error('isolated output labels are missing');
   oscillator.connect(destination);oscillator.start();toneStarted=true;await context.resume();
   element.srcObject=destination.stream;
   document.title="WEBKIT_PROGRESS:output-switch";
-  await element.setSinkId(initial[0].deviceId);
+  await element.setSinkId(firstOutput.deviceId);
   await element.play();
-  await element.setSinkId(initial[1].deviceId);
-  if(element.sinkId!==initial[1].deviceId)throw new Error('output selection did not change');
+  await element.setSinkId(secondOutput.deviceId);
+  if(element.sinkId!==secondOutput.deviceId)throw new Error('output selection did not change');
+  await control('measure-output');
+  const outputEnergy=window.__PALLADIUM_OUTPUT_ENERGY__ || 0;
+  if(outputEnergy<0.01)throw new Error('selected virtual speaker has no tone');
   let before=changes;
   await control('add');
   await wait(async()=>changes>before && (await outputs()).length>initial.length,'new output was not reported');
@@ -46,7 +52,7 @@ try {
   await control('remove');
   await wait(async()=>changes>before && (await outputs()).length===initial.length,'removed output remained in the device list');
   const final=await outputs();
-  return {ok:input.readyState==='live' && final.length===initial.length,changes,initialOutputs:initial.length,finalOutputs:final.length,capture:input.readyState,outputSwitched:true};
+  return {ok:input.readyState==='live' && final.length===initial.length,changes,initialOutputs:initial.length,finalOutputs:final.length,capture:input.readyState,outputSwitched:true,outputEnergy};
 } finally {
   if(microphone)microphone.getTracks().forEach(track=>track.stop());
   destination.stream.getTracks().forEach(track=>track.stop());

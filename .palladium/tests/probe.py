@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import array
 import os
 import sys
 import subprocess
@@ -41,7 +42,16 @@ def poll_title():
         if operation in completed_controls:
             return True
         try:
-            if operation == "add":
+            if operation in {"measure-call", "measure-output"}:
+                device = "palladium-test.monitor" if operation == "measure-call" else "palladium-test-second.monitor"
+                recording = subprocess.run(["timeout", "2", "parec", "--device=" + device, "--format=float32le", "--rate=48000", "--channels=2"], capture_output=True)
+                samples = array.array("f")
+                samples.frombytes(recording.stdout[:len(recording.stdout) // 4 * 4])
+                if not samples:
+                    raise ValueError("virtual speaker produced no samples")
+                energy = sum(sample * sample for sample in samples) / len(samples)
+                webview.evaluate_javascript("window.__PALLADIUM_OUTPUT_ENERGY__=" + json.dumps(energy), -1, None, None, None, None, None)
+            elif operation == "add":
                 control_module = subprocess.check_output(["pactl", "load-module", "module-null-sink", "sink_name=palladium-hotplug"], text=True).strip()
             elif operation == "default":
                 subprocess.run(["pactl", "set-default-sink", "palladium-hotplug"], check=True)

@@ -29,10 +29,10 @@ All native probes run again against the relocated package at `/usr/lib/palladium
 Compiled objects and the private prefix survive between runs. The Rust toolchain and Cargo dependency build trees are not part of the checkpoint cache. A job checkpoints before the hosted-runner deadline and automatically queues the next attempt, up to six attempts. Compilation failures stop the workflow. No runtime is published until the sandboxed native probes pass:
 
 1. PNG, JPEG, GIF, WebP and AVIF decoding.
-2. Decoded synthetic Opus audio with multiple transceivers and renegotiation.
+2. Decoded synthetic Opus audio with multiple transceivers and renegotiation, including measured tone energy at a virtual speaker output.
 3. AES-GCM worker encryption/decryption, including changed payload lengths, metadata and worker progress checks.
 4. An audible first participant alongside a worker that drops all frames, followed by the delayed participant becoming audible.
-5. Microphone capture, explicit output switching, and device add/default-change/remove notifications using isolated virtual devices.
+5. Microphone capture, explicit output switching with measured tone energy, and device add/default-change/remove notifications using isolated virtual devices.
 
 Tests use generated tones and an isolated PipeWire null sink, never a user's microphone or speakers. Native probes verify an offline media path, not Discord's DAVE protocol. Real two-party Discord calls, physical headset hotplug, and interactive screen sharing still require manual validation. Releases are prereleases until that validation is complete.
 
