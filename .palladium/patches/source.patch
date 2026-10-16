@@ -70,6 +70,30 @@ index af593956..a16740f0 100644
      request->start();
  }
  
+diff --git a/Source/WebCore/Modules/mediastream/RTCEncodedStreamProducer.cpp b/Source/WebCore/Modules/mediastream/RTCEncodedStreamProducer.cpp
+index fd0867b4..125b22d5 100644
+--- a/Source/WebCore/Modules/mediastream/RTCEncodedStreamProducer.cpp
++++ b/Source/WebCore/Modules/mediastream/RTCEncodedStreamProducer.cpp
+@@ -111,6 +111,7 @@ void RTCEncodedStreamProducer::start(Ref<RTCRtpTransformBackend>&& transformBack
+ 
+ void RTCEncodedStreamProducer::enqueueFrame(Ref<RTCRtpTransformableFrame>&& frame)
+ {
++    frame->didEnqueueToScript();
+     RefPtr context = m_context.get();
+     if (!context)
+         return;
+diff --git a/Source/WebCore/Modules/mediastream/RTCRtpTransformableFrame.h b/Source/WebCore/Modules/mediastream/RTCRtpTransformableFrame.h
+index a6edf51e..44fa3119 100644
+--- a/Source/WebCore/Modules/mediastream/RTCRtpTransformableFrame.h
++++ b/Source/WebCore/Modules/mediastream/RTCRtpTransformableFrame.h
+@@ -71,6 +71,7 @@ public:
+     virtual RTCEncodedVideoFrameMetadata videoMetadata() const = 0;
+ 
+     virtual bool isKeyFrame() const = 0;
++    virtual void didEnqueueToScript() { }
+ 
+     virtual Ref<RTCRtpTransformableFrame> clone() = 0;
+     virtual void setOptions(const RTCEncodedAudioFrameMetadata&) = 0;
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
 index f9dd520c..3ff468fe 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
@@ -231,10 +255,10 @@ index 538d1f73..49ed62cf 100644
      // https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/923
      // gst_util_set_object_arg(G_OBJECT(m_rtcTransceiver.get()), "fec-type", "ulp-red");
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
-index 2ec70d5b..7690c96c 100644
+index 2ec70d5b..a38bdfbd 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
 +++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
-@@ -22,24 +22,206 @@
+@@ -22,24 +22,213 @@
  
  #if ENABLE(WEB_RTC) && USE(GSTREAMER_WEBRTC)
  
@@ -279,7 +303,12 @@ index 2ec70d5b..7690c96c 100644
 +        gst_rtp_buffer_unmap(&rtp);
 +    }
 +
-+    ~GStreamerAudioTransformableFrame() { --*m_pending; }
++    ~GStreamerAudioTransformableFrame() { didEnqueueToScript(); }
++    void didEnqueueToScript() final
++    {
++        if (std::exchange(m_pendingBudget, false))
++            --*m_pending;
++    }
 +    std::span<const uint8_t> data() const final { return m_data.span(); }
 +    void setData(std::span<const uint8_t> data) final { m_data.clear(); m_data.append(data); }
 +    uint64_t timestamp() const final { return m_metadata.rtpTimestamp.value_or(0); }
@@ -292,6 +321,7 @@ index 2ec70d5b..7690c96c 100644
 +    {
 +        auto copy = adoptRef(*new GStreamerAudioTransformableFrame(m_buffer.get(), m_output.get(), m_generation, m_pending));
 +        copy->setData(m_data.span());
++        copy->didEnqueueToScript();
 +        return copy;
 +    }
 +
@@ -317,6 +347,7 @@ index 2ec70d5b..7690c96c 100644
 +    uint64_t m_generation;
 +    std::shared_ptr<std::atomic<unsigned>> m_pending;
 +    bool m_consumed { false };
++    bool m_pendingBudget { true };
 +};
 +
 +class GStreamerRtpTransformState : public ThreadSafeRefCounted<GStreamerRtpTransformState> {

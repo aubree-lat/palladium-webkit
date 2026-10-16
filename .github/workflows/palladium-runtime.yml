@@ -54,6 +54,15 @@ jobs:
           awk '{ print "/" $2 }' .palladium/source-files.sha256 | git sparse-checkout add --stdin
           sha256sum --check .palladium/source-files.sha256
           PALLADIUM_SOURCE_CHECK_ONLY=1 bash .palladium/scripts/prepare-source.sh "$RUNNER_TEMP/source-check"
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source .palladium/pins.env
+          gh api "repos/$GITHUB_REPOSITORY/compare/$WEBKIT_UPSTREAM_COMMIT...$(git rev-parse HEAD)?per_page=1" \
+            --jq '.files[].filename | select(startswith("Source/") or startswith("Tools/") or . == "CMakeLists.txt")' \
+            | LC_ALL=C sort > "$RUNNER_TEMP/native-changes"
+          awk '{ print $2 }' .palladium/source-files.sha256 | LC_ALL=C sort > "$RUNNER_TEMP/exported-changes"
+          diff -u "$RUNNER_TEMP/native-changes" "$RUNNER_TEMP/exported-changes"
 
   build:
     needs: check
@@ -135,7 +144,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: runtime-test-logs
-          path: .palladium/state/test-logs/
+          path: |
+            .palladium/state/test-logs/
+            .palladium/state/packaged-test-logs/
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7

@@ -5,7 +5,7 @@ Palladium's Linux runtime, based on WebKitGTK 2.54.1. This branch keeps a small 
 ## Changes
 
 - Incoming tracks become ready independently of silent or delayed participants. Repeated track-ready notifications are ignored.
-- Opus RTP payloads pass through encoded-transform workers on both sender and receiver. RTP identity and timing metadata are retained, changed payload sizes are supported, output is ordered on a serial queue, and queued frames are bounded. Closing a transform worker does not silently resume plaintext transmission. This is an initial audio implementation; encrypted video is not implemented and its payloads are blocked while a transform is attached.
+- Opus RTP payloads pass through encoded-transform workers on both sender and receiver. RTP identity and timing metadata are retained, changed payload sizes are supported, output is ordered on a serial queue, and queued native callbacks and output buffers are bounded independently of JavaScript garbage collection. Closing a transform worker does not silently resume plaintext transmission. This is an initial audio implementation; encrypted video is not implemented and its payloads are blocked while a transform is attached.
 - Explicit Unix PulseAudio server addresses no longer trip a sandbox-launcher string assertion.
 - GTK speaker enumeration and asynchronous output selection are enabled for Palladium, allowing Discord to restore a selected device without a fresh gesture. Permission policies remain enforced.
 - Device refresh clears stale speaker entries, and default-device changes emit device-change notifications.
@@ -23,6 +23,8 @@ GObject introspection stays enabled for the native Python probes. Full WebKit de
 ## CI and releases
 
 `.github/workflows/palladium-runtime.yml` checks the source patch against the SHA-pinned official archive and builds inside a pinned Arch container. Package versions are recorded; Arch packages currently follow the distribution repositories, so a changed dependency set invalidates compiled objects. This is not a claim of bit-for-bit reproducibility.
+
+All native probes run again against the relocated package at `/usr/lib/palladium/runtime`, so helper paths and packaged libraries are tested before publication.
 
 Compiled objects and the private prefix survive between runs. The Rust toolchain and Cargo dependency build trees are not part of the checkpoint cache. A job checkpoints before the hosted-runner deadline and automatically queues the next attempt, up to six attempts. Compilation failures stop the workflow. No runtime is published until the sandboxed native probes pass:
 

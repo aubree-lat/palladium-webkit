@@ -71,6 +71,7 @@ public:
     virtual RTCEncodedVideoFrameMetadata videoMetadata() const = 0;
 
     virtual bool isKeyFrame() const = 0;
+    virtual void didEnqueueToScript() { }
 
     virtual Ref<RTCRtpTransformableFrame> clone() = 0;
     virtual void setOptions(const RTCEncodedAudioFrameMetadata&) = 0;

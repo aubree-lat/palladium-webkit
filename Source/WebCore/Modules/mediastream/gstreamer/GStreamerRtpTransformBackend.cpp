@@ -62,7 +62,12 @@ public:
         gst_rtp_buffer_unmap(&rtp);
     }
 
-    ~GStreamerAudioTransformableFrame() { --*m_pending; }
+    ~GStreamerAudioTransformableFrame() { didEnqueueToScript(); }
+    void didEnqueueToScript() final
+    {
+        if (std::exchange(m_pendingBudget, false))
+            --*m_pending;
+    }
     std::span<const uint8_t> data() const final { return m_data.span(); }
     void setData(std::span<const uint8_t> data) final { m_data.clear(); m_data.append(data); }
     uint64_t timestamp() const final { return m_metadata.rtpTimestamp.value_or(0); }
@@ -75,6 +80,7 @@ public:
     {
         auto copy = adoptRef(*new GStreamerAudioTransformableFrame(m_buffer.get(), m_output.get(), m_generation, m_pending));
         copy->setData(m_data.span());
+        copy->didEnqueueToScript();
         return copy;
     }
 
@@ -100,6 +106,7 @@ private:
     uint64_t m_generation;
     std::shared_ptr<std::atomic<unsigned>> m_pending;
     bool m_consumed { false };
+    bool m_pendingBudget { true };
 };
 
 class GStreamerRtpTransformState : public ThreadSafeRefCounted<GStreamerRtpTransformState> {

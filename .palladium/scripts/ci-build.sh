@@ -14,6 +14,7 @@ if [ "$(id -u)" = 0 ]; then
   bash .palladium/scripts/build-webkit.sh --print-dependencies arch \
     | sed 's/^sudo //; s/pacman -S /pacman -S --noconfirm /' | bash
   id builder >/dev/null 2>&1 || useradd --create-home --home-dir "$builder_root" builder
+  install -d -o builder -g builder /usr/lib/palladium
   chown -R builder:builder "$repository"
   trap 'chown -R "${PALLADIUM_HOST_OWNER:?}" "$repository"' EXIT
   exec_status=0

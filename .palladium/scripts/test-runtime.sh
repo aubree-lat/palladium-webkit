@@ -41,7 +41,7 @@ export XDG_CURRENT_DESKTOP=GNOME
 export LIBGL_ALWAYS_SOFTWARE=1
 export PULSE_SERVER=unix:$XDG_RUNTIME_DIR/pulse/native
 export PIPEWIRE_RUNTIME_DIR=$XDG_RUNTIME_DIR
-log_dir=.palladium/state/test-logs
+log_dir=${PALLADIUM_TEST_LOG_DIR:-.palladium/state/test-logs}
 mkdir -p "$log_dir"
 pipewire > "$log_dir/pipewire.log" 2>&1 &
 pipewire_pid=$!

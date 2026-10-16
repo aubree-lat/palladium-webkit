@@ -73,6 +73,10 @@ try {
     if(energy>0.01 && received>10 && forwarded>=10 && dropped>=10)break;
   }
   const firstPassed = energy>0.01 && received>10 && forwarded>=10 && dropped>=10;
+  await new Promise(resolve=>setTimeout(resolve,3200));
+  const sustained = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(sustained);
+  const sustainedEnergy=sustained.reduce((sum,sample)=>sum+sample*sample,0)/sustained.length;
   workers[1].postMessage(true);
   for(let iteration=0;iteration<30;iteration++){
     await new Promise(resolve=>setTimeout(resolve,100));
@@ -81,7 +85,7 @@ try {
     secondEnergy=samples.reduce((sum,sample)=>sum+sample*sample,0)/samples.length;
     if(secondEnergy>0.01)break;
   }
-  return {ok:firstPassed && secondEnergy>0.01 && !errors.length,energy,secondEnergy,forwarded,dropped,received,events,errors,tracks:incoming.getTransceivers().map(t=>({direction:t.currentDirection,muted:t.receiver.track.muted}))};
+  return {ok:firstPassed && sustainedEnergy>0.01 && secondEnergy>0.01 && !errors.length,energy,sustainedEnergy,secondEnergy,forwarded,dropped,received,events,errors,tracks:incoming.getTransceivers().map(t=>({direction:t.currentDirection,muted:t.receiver.track.muted}))};
 } finally {
   workers.forEach(w=>w.terminate());incoming.close();outgoing.close();oscillator.stop();destination.stream.getTracks().forEach(t=>t.stop());await context.close();
 }

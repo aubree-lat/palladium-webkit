@@ -111,6 +111,7 @@ void RTCEncodedStreamProducer::start(Ref<RTCRtpTransformBackend>&& transformBack
 
 void RTCEncodedStreamProducer::enqueueFrame(Ref<RTCRtpTransformableFrame>&& frame)
 {
+    frame->didEnqueueToScript();
     RefPtr context = m_context.get();
     if (!context)
         return;
