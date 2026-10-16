@@ -70,6 +70,7 @@ for attempt in $(seq 1 40); do
   sleep 0.1
 done
 pactl set-default-source palladium-test-microphone
+pactl set-default-sink palladium-test
 probes=(images audio encoded-audio staggered-audio devices)
 if [ "$#" -gt 0 ]; then probes=("$@"); fi
 for probe in "${probes[@]}"; do

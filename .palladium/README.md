@@ -6,6 +6,7 @@ Palladium's Linux runtime, based on WebKitGTK 2.54.1. This branch keeps a small 
 
 - Incoming tracks become ready independently of silent or delayed participants. Repeated track-ready notifications are ignored.
 - Opus RTP payloads pass through encoded-transform workers on both sender and receiver. RTP identity and timing metadata are retained, changed payload sizes are supported, output is ordered on a serial queue, and queued native callbacks and output buffers are bounded independently of JavaScript garbage collection. Closing a transform worker does not silently resume plaintext transmission. This is an initial audio implementation; encrypted video is not implemented and its payloads are blocked while a transform is attached.
+- Backport upstream commit [ad718fae36e5](https://github.com/WebKit/WebKit/commit/ad718fae36e5b41ae7ebe55d6422d667e75a09fa), fixing WebAudio stream timestamps and durations so audio sinks do not discard the samples as gaps ([bug 325697](https://bugs.webkit.org/show_bug.cgi?id=325697)).
 - Explicit Unix PulseAudio server addresses no longer trip a sandbox-launcher string assertion.
 - GTK speaker enumeration and asynchronous output selection are enabled for Palladium, allowing Discord to restore a selected device without a fresh gesture. Permission policies remain enforced.
 - Device refresh clears stale speaker entries, and default-device changes emit device-change notifications.
