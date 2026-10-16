@@ -25,6 +25,7 @@
 #include "RTCRtpTransformableFrame.h"
 #include <gst/rtp/gstrtpbuffer.h>
 #include <wtf/NeverDestroyed.h>
+#include <wtf/StdLibExtras.h>
 #include <wtf/WorkQueue.h>
 #include <atomic>
 #include <memory>
@@ -46,7 +47,7 @@ public:
         if (!gst_rtp_buffer_map(buffer, GST_MAP_READ, &rtp))
             return;
         auto size = gst_rtp_buffer_get_payload_len(&rtp);
-        m_data.append(std::span { static_cast<const uint8_t*>(gst_rtp_buffer_get_payload(&rtp)), size });
+        m_data.append(unsafeMakeSpan(static_cast<const uint8_t*>(gst_rtp_buffer_get_payload(&rtp)), size));
         m_header.resize(gst_rtp_buffer_get_header_len(&rtp));
         gst_buffer_extract(buffer, 0, m_header.mutableSpan().data(), m_header.size());
         m_header[0] &= ~0x20; // Padding is not part of the encoded frame.
@@ -117,7 +118,7 @@ public:
     uint64_t generation WTF_GUARDED_BY_LOCK(lock) { 0 };
     std::shared_ptr<std::atomic<unsigned>> pending { std::make_shared<std::atomic<unsigned>>(0) };
     std::atomic<unsigned> queuedOutputs { 0 };
-    const Ref<WorkQueue> outputQueue { WorkQueue::create("Palladium Opus transform"_s) };
+    RefPtr<WorkQueue> outputQueue WTF_GUARDED_BY_LOCK(lock);
 };
 
 static Ref<GStreamerRtpTransformState> stateFor(GstObject* object)
@@ -181,7 +182,14 @@ void GStreamerRtpTransformBackend::processTransformedFrame(RTCRtpTransformableFr
         --m_state->queuedOutputs;
         return;
     }
-    m_state->outputQueue->dispatch([state = m_state.copyRef(), output = GRefPtr(audio.output()), buffer = WTF::move(buffer), generation = audio.generation()]() mutable {
+    RefPtr<WorkQueue> queue;
+    {
+        Locker locker { m_state->lock };
+        if (!m_state->outputQueue)
+            m_state->outputQueue = WorkQueue::create("Palladium Opus transform"_s);
+        queue = m_state->outputQueue;
+    }
+    queue->dispatch([state = m_state.copyRef(), output = GRefPtr(audio.output()), buffer = WTF::move(buffer), generation = audio.generation()]() mutable {
         {
             Locker locker { state->lock };
             if (generation != state->generation || !state->callback) {

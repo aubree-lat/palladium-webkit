@@ -255,10 +255,10 @@ index 538d1f73..49ed62cf 100644
      // https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/923
      // gst_util_set_object_arg(G_OBJECT(m_rtcTransceiver.get()), "fec-type", "ulp-red");
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
-index 2ec70d5b..a38bdfbd 100644
+index 2ec70d5b..118ba821 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
 +++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
-@@ -22,24 +22,213 @@
+@@ -22,24 +22,221 @@
  
  #if ENABLE(WEB_RTC) && USE(GSTREAMER_WEBRTC)
  
@@ -266,6 +266,7 @@ index 2ec70d5b..a38bdfbd 100644
 +#include "RTCRtpTransformableFrame.h"
 +#include <gst/rtp/gstrtpbuffer.h>
 +#include <wtf/NeverDestroyed.h>
++#include <wtf/StdLibExtras.h>
 +#include <wtf/WorkQueue.h>
 +#include <atomic>
 +#include <memory>
@@ -287,7 +288,7 @@ index 2ec70d5b..a38bdfbd 100644
 +        if (!gst_rtp_buffer_map(buffer, GST_MAP_READ, &rtp))
 +            return;
 +        auto size = gst_rtp_buffer_get_payload_len(&rtp);
-+        m_data.append(std::span { static_cast<const uint8_t*>(gst_rtp_buffer_get_payload(&rtp)), size });
++        m_data.append(unsafeMakeSpan(static_cast<const uint8_t*>(gst_rtp_buffer_get_payload(&rtp)), size));
 +        m_header.resize(gst_rtp_buffer_get_header_len(&rtp));
 +        gst_buffer_extract(buffer, 0, m_header.mutableSpan().data(), m_header.size());
 +        m_header[0] &= ~0x20; // Padding is not part of the encoded frame.
@@ -358,7 +359,7 @@ index 2ec70d5b..a38bdfbd 100644
 +    uint64_t generation WTF_GUARDED_BY_LOCK(lock) { 0 };
 +    std::shared_ptr<std::atomic<unsigned>> pending { std::make_shared<std::atomic<unsigned>>(0) };
 +    std::atomic<unsigned> queuedOutputs { 0 };
-+    const Ref<WorkQueue> outputQueue { WorkQueue::create("Palladium Opus transform"_s) };
++    RefPtr<WorkQueue> outputQueue WTF_GUARDED_BY_LOCK(lock);
 +};
 +
 +static Ref<GStreamerRtpTransformState> stateFor(GstObject* object)
@@ -425,7 +426,14 @@ index 2ec70d5b..a38bdfbd 100644
 +        --m_state->queuedOutputs;
 +        return;
 +    }
-+    m_state->outputQueue->dispatch([state = m_state.copyRef(), output = GRefPtr(audio.output()), buffer = WTF::move(buffer), generation = audio.generation()]() mutable {
++    RefPtr<WorkQueue> queue;
++    {
++        Locker locker { m_state->lock };
++        if (!m_state->outputQueue)
++            m_state->outputQueue = WorkQueue::create("Palladium Opus transform"_s);
++        queue = m_state->outputQueue;
++    }
++    queue->dispatch([state = m_state.copyRef(), output = GRefPtr(audio.output()), buffer = WTF::move(buffer), generation = audio.generation()]() mutable {
 +        {
 +            Locker locker { state->lock };
 +            if (generation != state->generation || !state->callback) {
@@ -742,7 +750,7 @@ index 549ee896..c1ced57f 100644
 +#endif
 +}
 diff --git a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp b/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
-index 6afd0241..fbf1d980 100644
+index 6afd0241..95e9a39e 100644
 --- a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
 +++ b/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
 @@ -294,7 +294,7 @@ static void bindPulse(Vector<CString>& args)
@@ -750,7 +758,7 @@ index 6afd0241..fbf1d980 100644
          auto pulseServerString = CStringView::unsafeFromUTF8(pulseServer);
          if (startsWith(pulseServerString.span(), "unix:"_s))
 -            bindIfExists(args, CStringView::fromUTF8(pulseServerString.span().subspan(5)), BindFlags::ReadWrite);
-+            bindIfExists(args, CStringView::unsafeFromUTF8(pulseServer + 5), BindFlags::ReadWrite);
++            bindIfExists(args, CStringView::unsafeFromUTF8(pulseServerString.span().subspan(5).data()), BindFlags::ReadWrite);
          // else it uses tcp
      } else {
          const char* runtimeDir = g_get_user_runtime_dir();
