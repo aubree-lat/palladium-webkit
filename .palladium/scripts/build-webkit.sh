@@ -33,7 +33,7 @@ detect_distro() {
 print_dependencies() {
   case "$(detect_distro)" in
     arch)
-      printf '%s\n' 'sudo pacman -S --needed base-devel bubblewrap ca-certificates ccache clang cmake curl enchant git glib2-devel gobject-introspection gperf gst-libav gst-plugin-pipewire gst-plugins-bad gst-plugins-base gst-plugins-good gtk3 harfbuzz-icu hyphen lcms2 libavif libportal-gtk3 libpulse libsecret libseccomp libtasn1 libwebp libwpe libxslt lld mesa ninja openssl patch pipewire pkgconf ruby ruby-erb rustup unifdef wayland-protocols woff2 xdg-dbus-proxy xdg-desktop-portal xdg-desktop-portal-gtk xz zstd'
+      printf '%s\n' 'sudo pacman -S --needed base-devel bubblewrap ca-certificates ccache clang cmake curl enchant git glib2-devel gobject-introspection gperf gst-libav gst-plugin-pipewire gst-plugins-bad gst-plugins-base gst-plugins-good gtk3 harfbuzz-icu hyphen lcms2 libavif libportal-gtk3 libpulse libsecret libseccomp libtasn1 libwebp libxslt lld mesa ninja openssl patch pipewire pkgconf ruby ruby-erb rustup unifdef wayland-protocols woff2 xdg-dbus-proxy xdg-desktop-portal xdg-desktop-portal-gtk xz zstd'
       ;;
     ubuntu)
       printf '%s\n' 'sudo apt update'
@@ -153,6 +153,7 @@ cmake \
   -B build -G Ninja \
   -D PORT=GTK \
   -D CMAKE_BUILD_TYPE=Release \
+  -D CMAKE_EXPORT_COMPILE_COMMANDS=ON \
   -D CMAKE_C_COMPILER=clang \
   -D CMAKE_CXX_COMPILER=clang++ \
   -D CMAKE_C_FLAGS_RELEASE='-O2 -DNDEBUG' \
@@ -211,6 +212,12 @@ for expected in \
   fi
 done
 
+mapfile -t native_targets < <(python3 "$root/scripts/native-targets.py" build/compile_commands.json)
+if [ "${#native_targets[@]}" -eq 0 ]; then
+  printf '%s\n' 'No encoded-transform compilation targets were found.' >&2
+  exit 1
+fi
+ninja -C build -j "$jobs" "${native_targets[@]}"
 ninja -C build -j "$jobs"
 ninja -C build install
 WEBKIT_PREFIX="$prefix" bash "$root/scripts/verify-linux-runtime.sh"

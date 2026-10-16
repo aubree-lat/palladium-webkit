@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import sys
+import subprocess
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -25,11 +26,37 @@ window.show_all()
 script = "Promise.resolve().then(async function(){" + Path(sys.argv[1]).read_text(encoding="utf-8") + "}).then(function(result){document.title='WEBKIT_RESULT:'+encodeURIComponent(JSON.stringify(result))}).catch(function(e){document.title='WEBKIT_RESULT:'+encodeURIComponent(JSON.stringify({ok:false,error:e.name+': '+e.message}))});"
 
 exit_status = 3
+control_module = None
+completed_controls = set()
+webview.connect("permission-request", lambda view, request: (request.allow(), True)[1])
 
 
 def poll_title():
-    global exit_status
+    global exit_status, control_module
     title = webview.get_title() or ""
+    if title.startswith("WEBKIT_CONTROL:"):
+        operation = title.split(":", 1)[1]
+        if operation in completed_controls:
+            return True
+        try:
+            if operation == "add":
+                control_module = subprocess.check_output(["pactl", "load-module", "module-null-sink", "sink_name=palladium-hotplug"], text=True).strip()
+            elif operation == "default":
+                subprocess.run(["pactl", "set-default-sink", "palladium-hotplug"], check=True)
+            elif operation == "remove" and control_module:
+                subprocess.run(["pactl", "unload-module", control_module], check=True)
+                control_module = None
+            else:
+                raise ValueError("unsupported probe control")
+            completed_controls.add(operation)
+            view_script = "window.__PALLADIUM_DEVICE_CONTROL__=" + json.dumps(operation)
+            webview.evaluate_javascript(view_script, -1, None, None, None, None, None)
+        except Exception as error:
+            print(json.dumps({"ok": False, "error": str(error)}))
+            exit_status = 1
+            Gtk.main_quit()
+            return False
+        return True
     if not title.startswith("WEBKIT_RESULT:"):
         return True
     result = json.loads(unquote(title[len("WEBKIT_RESULT:"):]))
@@ -63,4 +90,6 @@ webview.connect("load-changed", on_load)
 webview.load_html("<html><body>palladium webkit probe</body></html>", "https://discord.com/")
 GLib.timeout_add_seconds(30, timed_out)
 Gtk.main()
+if control_module:
+    subprocess.run(["pactl", "unload-module", control_module], check=False)
 sys.exit(exit_status)

@@ -27,6 +27,7 @@ Compiled objects and the private prefix survive between runs. The Rust toolchain
 1. Decoded synthetic Opus audio with multiple transceivers and renegotiation.
 2. AES-GCM worker encryption/decryption, including changed payload lengths, metadata and worker progress checks.
 3. An audible first participant alongside a worker that drops all frames, followed by the delayed participant becoming audible.
+4. Microphone capture, explicit output switching, and device add/default-change/remove notifications using isolated virtual devices.
 
 Tests use generated tones and an isolated PipeWire null sink, never a user's microphone or speakers. Native probes verify an offline media path, not Discord's DAVE protocol. Real two-party Discord calls, physical headset hotplug, and interactive screen sharing still require manual validation. Releases are prereleases until that validation is complete.
 

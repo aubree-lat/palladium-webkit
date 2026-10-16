@@ -109,6 +109,7 @@ public:
     bool active WTF_GUARDED_BY_LOCK(lock) { false };
     uint64_t generation WTF_GUARDED_BY_LOCK(lock) { 0 };
     std::shared_ptr<std::atomic<unsigned>> pending { std::make_shared<std::atomic<unsigned>>(0) };
+    std::atomic<unsigned> queuedOutputs { 0 };
     const Ref<WorkQueue> outputQueue { WorkQueue::create("Palladium Opus transform"_s) };
 };
 
@@ -168,16 +169,23 @@ void GStreamerRtpTransformBackend::processTransformedFrame(RTCRtpTransformableFr
     auto buffer = audio.takeBuffer();
     if (!buffer)
         return;
+    if (m_state->queuedOutputs.fetch_add(1) >= 128) {
+        --m_state->queuedOutputs;
+        return;
+    }
     m_state->outputQueue->dispatch([state = m_state.copyRef(), output = GRefPtr(audio.output()), buffer = WTF::move(buffer), generation = audio.generation()]() mutable {
         {
             Locker locker { state->lock };
-            if (generation != state->generation || !state->callback)
+            if (generation != state->generation || !state->callback) {
+                --state->queuedOutputs;
                 return;
+            }
         }
         // A serial queue preserves packet order without blocking the media thread
         // while JavaScript handles a frame. The sink pad serializes against flush.
         if (gst_pad_is_active(output.get()) && gst_pad_is_linked(output.get()))
             gst_pad_chain(output.get(), buffer.leakRef());
+        --state->queuedOutputs;
     });
 }
 

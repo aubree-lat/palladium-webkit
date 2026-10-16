@@ -9,6 +9,7 @@ fi
 base=$(
   cat "$repository/.palladium/pins.env" \
     "$repository/.palladium/scripts/build-librice.sh" \
+    "$repository/.palladium/scripts/native-targets.py" \
     "$repository/.palladium/scripts/build-webkit.sh" | sha256sum | cut -d' ' -f1
 )
 source_hash=$(git diff --binary --no-ext-diff "$WEBKIT_UPSTREAM_COMMIT" -- Source Tools CMakeLists.txt | sha256sum | cut -d' ' -f1)
