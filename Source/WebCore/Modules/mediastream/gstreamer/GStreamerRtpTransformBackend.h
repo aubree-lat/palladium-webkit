@@ -50,6 +50,7 @@ private:
     Side m_side;
     Ref<GStreamerRtpTransformState> m_state;
     bool m_isAudio;
+    uint64_t m_generation { 0 };
 };
 
 } // namespace WebCore

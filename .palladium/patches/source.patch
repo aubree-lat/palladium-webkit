@@ -255,10 +255,10 @@ index 538d1f73..49ed62cf 100644
      // https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/923
      // gst_util_set_object_arg(G_OBJECT(m_rtcTransceiver.get()), "fec-type", "ulp-red");
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
-index 2ec70d5b..118ba821 100644
+index 2ec70d5b..3e8091be 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
 +++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
-@@ -22,24 +22,221 @@
+@@ -22,24 +22,226 @@
  
  #if ENABLE(WEB_RTC) && USE(GSTREAMER_WEBRTC)
  
@@ -386,7 +386,8 @@ index 2ec70d5b..118ba821 100644
 +    // audio after the application has requested an encoded transform.
 +    Locker locker { m_state->lock };
 +    m_state->active = true;
-+    ++m_state->generation;
++    m_state->callback = { };
++    m_generation = ++m_state->generation;
 +}
 +
 +GStreamerRtpTransformBackend::~GStreamerRtpTransformBackend() = default;
@@ -401,16 +402,18 @@ index 2ec70d5b..118ba821 100644
 -    Locker holdLock { m_inputCallbackLock };
 -    m_inputCallback = WTF::move(callback);
 +    Locker locker { m_state->lock };
-+    m_state->callback = WTF::move(callback);
++    if (m_generation == m_state->generation)
++        m_state->callback = WTF::move(callback);
  }
  
  void GStreamerRtpTransformBackend::clearTransformableFrameCallback()
  {
 -    setInputCallback({ });
 +    Locker locker { m_state->lock };
++    if (m_generation != m_state->generation)
++        return;
 +    m_state->callback = { };
-+    // Keep this endpoint blocked after a worker closes. Replacing the transform
-+    // installs a new generation; closing a worker must not leak plaintext.
++    m_state->active = false;
 +    ++m_state->generation;
 +}
 +
@@ -419,6 +422,8 @@ index 2ec70d5b..118ba821 100644
 +    if (!m_isAudio)
 +        return;
 +    auto& audio = static_cast<GStreamerAudioTransformableFrame&>(frame);
++    if (audio.generation() != m_generation)
++        return;
 +    auto buffer = audio.takeBuffer();
 +    if (!buffer)
 +        return;
@@ -487,7 +492,7 @@ index 2ec70d5b..118ba821 100644
  
  } // namespace WebCore
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.h b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.h
-index 1de77175..4036a32d 100644
+index 1de77175..3628d5be 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.h
 +++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.h
 @@ -22,17 +22,24 @@
@@ -517,7 +522,7 @@ index 1de77175..4036a32d 100644
  
  private:
      // RTCRtpTransformBackend
-@@ -40,20 +47,11 @@ private:
+@@ -40,20 +47,12 @@ private:
      void clearTransformableFrameCallback() final;
      Side side() const final { return m_side; }
  
@@ -529,6 +534,7 @@ index 1de77175..4036a32d 100644
 -
 +    Ref<GStreamerRtpTransformState> m_state;
 +    bool m_isAudio;
++    uint64_t m_generation { 0 };
  };
  
 -inline GStreamerRtpTransformBackend::GStreamerRtpTransformBackend(MediaType mediaType, Side side)

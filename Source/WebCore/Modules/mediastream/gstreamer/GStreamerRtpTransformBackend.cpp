@@ -145,7 +145,8 @@ GStreamerRtpTransformBackend::GStreamerRtpTransformBackend(GstObject* object, Si
     // audio after the application has requested an encoded transform.
     Locker locker { m_state->lock };
     m_state->active = true;
-    ++m_state->generation;
+    m_state->callback = { };
+    m_generation = ++m_state->generation;
 }
 
 GStreamerRtpTransformBackend::~GStreamerRtpTransformBackend() = default;
@@ -158,15 +159,17 @@ RTCRtpTransformBackend::MediaType GStreamerRtpTransformBackend::mediaType() cons
 void GStreamerRtpTransformBackend::setInputCallback(Callback&& callback)
 {
     Locker locker { m_state->lock };
-    m_state->callback = WTF::move(callback);
+    if (m_generation == m_state->generation)
+        m_state->callback = WTF::move(callback);
 }
 
 void GStreamerRtpTransformBackend::clearTransformableFrameCallback()
 {
     Locker locker { m_state->lock };
+    if (m_generation != m_state->generation)
+        return;
     m_state->callback = { };
-    // Keep this endpoint blocked after a worker closes. Replacing the transform
-    // installs a new generation; closing a worker must not leak plaintext.
+    m_state->active = false;
     ++m_state->generation;
 }
 
@@ -175,6 +178,8 @@ void GStreamerRtpTransformBackend::processTransformedFrame(RTCRtpTransformableFr
     if (!m_isAudio)
         return;
     auto& audio = static_cast<GStreamerAudioTransformableFrame&>(frame);
+    if (audio.generation() != m_generation)
+        return;
     auto buffer = audio.takeBuffer();
     if (!buffer)
         return;

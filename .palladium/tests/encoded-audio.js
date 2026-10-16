@@ -22,6 +22,9 @@ right.onicecandidate = event => route(event.candidate, left, leftQueue);
 const workers = [];
 const counts = { encrypt: 0, decrypt: 0 };
 const failures = [];
+const epochs = {encrypt:1,decrypt:1};
+let replacements = 0;
+let detachedAudioWorks = false;
 const workerText = `self.onrtctransform = async event => {
   const { readable, writable, options } = event.transformer;
   let count = 0;
@@ -35,6 +38,7 @@ const workerText = `self.onrtctransform = async event => {
       if (metadata.synchronizationSource === undefined || metadata.rtpTimestamp === undefined) throw new Error('missing RTP metadata');
       if (options.operation === 'encrypt') {
         const iv = new Uint8Array(12);
+        new DataView(iv.buffer).setUint32(0, options.epoch);
         new DataView(iv.buffer).setUint32(8, ++sequence);
         const cipher = new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv}, key, frame.data));
         const wire = new Uint8Array(iv.length + cipher.length);
@@ -44,19 +48,20 @@ const workerText = `self.onrtctransform = async event => {
         frame.data = await crypto.subtle.decrypt({name:'AES-GCM',iv:wire.slice(0,12)}, key, wire.slice(12));
       }
       controller.enqueue(frame);
-      if (++count % 10 === 0) self.postMessage({operation:options.operation,count});
+      if (++count % 10 === 0) self.postMessage({operation:options.operation,epoch:options.epoch,count});
     }})).pipeTo(writable);
   } catch (e) { self.postMessage({error:e.name+': '+e.message}); }
 };`;
 const workerUrl = URL.createObjectURL(new Blob([workerText], {type:'text/javascript'}));
-function transform(endpoint, operation) {
+function transform(endpoint, operation, epoch=1) {
+  epochs[operation]=epoch;
   const worker = new Worker(workerUrl);
   worker.onmessage = event => {
     if (event.data.error) failures.push(event.data.error);
-    else counts[event.data.operation] = event.data.count;
+    else if(epochs[event.data.operation]===event.data.epoch)counts[event.data.operation] = event.data.count;
   };
   workers.push(worker);
-  endpoint.transform = new RTCRtpScriptTransform(worker, {operation});
+  endpoint.transform = new RTCRtpScriptTransform(worker, {operation,epoch});
 }
 right.ontrack = event => {
   transform(event.receiver, 'decrypt');
@@ -90,7 +95,30 @@ try {
     inbound = Array.from((await right.getStats()).values()).filter(s => s.type === 'inbound-rtp').map(s => ({kind:s.kind, bytes:s.bytesReceived, packets:s.packetsReceived}));
     if (energy > 0.01 && counts.encrypt >= 10 && counts.decrypt >= 10) break;
   }
-  return {ok:energy > 0.01 && receivedTrack && !candidateError && counts.encrypt >= 10 && counts.decrypt >= 10 && !failures.length, counts, failures, receivedTrack, energy, inbound, candidateError, states:[left.connectionState,right.connectionState], mids:left.getTransceivers().map(t => t.mid)};
+  const initialPassed = energy>0.01 && counts.encrypt>=10 && counts.decrypt>=10;
+  if(initialPassed) {
+    for(let epoch=2;epoch<=4;epoch++) {
+      const decodedBefore=counts.decrypt;
+      counts.encrypt=0;
+      transform(sender,'encrypt',epoch);
+      let recovered=false;
+      for(let iteration=0;iteration<30;iteration++) {
+        await new Promise(resolve=>setTimeout(resolve,100));
+        const samples=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(samples);
+        energy=samples.reduce((sum,sample)=>sum+sample*sample,0)/samples.length;
+        if(energy>0.01 && counts.encrypt>=10 && counts.decrypt>=decodedBefore+10){recovered=true;break;}
+      }
+      if(!recovered)break;
+      replacements++;
+    }
+    sender.transform=null;
+    right.getReceivers().forEach(receiver=>receiver.transform=null);
+    await new Promise(resolve=>setTimeout(resolve,800));
+    const samples=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(samples);
+    energy=samples.reduce((sum,sample)=>sum+sample*sample,0)/samples.length;
+    detachedAudioWorks=energy>0.01;
+  }
+  return {ok:initialPassed && replacements===3 && detachedAudioWorks && receivedTrack && !candidateError && !failures.length, counts, failures, replacements, detachedAudioWorks, receivedTrack, energy, inbound, candidateError, states:[left.connectionState,right.connectionState], mids:left.getTransceivers().map(t => t.mid)};
 } finally {
   workers.forEach(worker => worker.terminate());
   URL.revokeObjectURL(workerUrl);
