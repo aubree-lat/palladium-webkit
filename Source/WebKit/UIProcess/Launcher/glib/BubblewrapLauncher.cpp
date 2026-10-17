@@ -294,7 +294,7 @@ static void bindPulse(Vector<CString>& args)
     if (pulseServer) {
         auto pulseServerString = CStringView::unsafeFromUTF8(pulseServer);
         if (startsWith(pulseServerString.span(), "unix:"_s))
-            bindIfExists(args, CStringView::unsafeFromUTF8(pulseServerString.span().subspan(5).data()), BindFlags::ReadWrite);
+            bindIfExists(args, CStringView::fromUTF8(pulseServerString.spanIncludingNullTerminator().subspan(5)), BindFlags::ReadWrite);
         // else it uses tcp
     } else {
         const char* runtimeDir = g_get_user_runtime_dir();

@@ -418,6 +418,11 @@ if (NOT USE_GTK4)
     list(REMOVE_ITEM WebKitWebProcessExtension_INSTALLED_HEADERS ${WebKitGTK_DERIVED_SOURCES_DIR}/webkit/webkit-web-process-extension.h)
 endif ()
 
+list(APPEND WebKit_HEADERS
+    ${WebKitGTK_INSTALLED_HEADERS}
+    ${WebKitWebProcessExtension_INSTALLED_HEADERS}
+)
+
 if (USE_GTK4)
     set(WebKitGTK_ENUM_HEADER_TEMPLATE ${WEBKIT_DIR}/UIProcess/API/gtk/WebKitEnumTypesGtk4.h.in)
 else ()
