@@ -159,8 +159,11 @@ RTCRtpTransformBackend::MediaType GStreamerRtpTransformBackend::mediaType() cons
 void GStreamerRtpTransformBackend::setInputCallback(Callback&& callback)
 {
     Locker locker { m_state->lock };
-    if (m_generation == m_state->generation)
-        m_state->callback = WTF::move(callback);
+    if (m_generation != m_state->generation)
+        return;
+    m_generation = ++m_state->generation;
+    m_state->active = true;
+    m_state->callback = WTF::move(callback);
 }
 
 void GStreamerRtpTransformBackend::clearTransformableFrameCallback()
@@ -178,8 +181,6 @@ void GStreamerRtpTransformBackend::processTransformedFrame(RTCRtpTransformableFr
     if (!m_isAudio)
         return;
     auto& audio = static_cast<GStreamerAudioTransformableFrame&>(frame);
-    if (audio.generation() != m_generation)
-        return;
     auto buffer = audio.takeBuffer();
     if (!buffer)
         return;

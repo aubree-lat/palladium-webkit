@@ -72,6 +72,8 @@ void RTCRtpTransform::attachToReceiver(RTCRtpReceiver& receiver, RTCRtpTransform
         return;
 
     m_transform->initializeBackendForReceiver(*backend);
+    if (previousTransform)
+        previousTransform->backendTransferedToNewTransform();
 }
 
 void RTCRtpTransform::attachToSender(RTCRtpSender& sender, RTCRtpTransform* previousTransform)

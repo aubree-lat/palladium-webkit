@@ -107,6 +107,8 @@ jobs:
             .palladium/state/compile-seconds
             .palladium/state/home/.cache/palladium/webkit-build
             .palladium/state/home/.cache/ccache
+            .palladium/state/home/.cache/palladium/cargo-c-build
+            .palladium/state/home/.cargo/registry
             .palladium/state/home/.cache/palladium/librice/LICENSE-*
             .palladium/state/home/.local/share/palladium
             .palladium/state/home/.cargo/bin
@@ -132,6 +134,8 @@ jobs:
             .palladium/state/compile-seconds
             .palladium/state/home/.cache/palladium/webkit-build
             .palladium/state/home/.cache/ccache
+            .palladium/state/home/.cache/palladium/cargo-c-build
+            .palladium/state/home/.cargo/registry
             .palladium/state/home/.cache/palladium/librice/LICENSE-*
             .palladium/state/home/.local/share/palladium
             .palladium/state/home/.cargo/bin

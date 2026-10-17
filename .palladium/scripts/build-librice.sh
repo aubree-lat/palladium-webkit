@@ -43,7 +43,8 @@ source_dir=${LIBRICE_SRC:-$cache_root/palladium/librice}
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 if ! command -v cargo-cinstall >/dev/null 2>&1 || ! cargo-cinstall --version | grep -Fq "0.10.25"; then
-  cargo install cargo-c --version "$CARGO_C_VERSION" --locked
+  CARGO_TARGET_DIR="$cache_root/palladium/cargo-c-build" cargo install cargo-c --version "$CARGO_C_VERSION" --locked --force
+  rm -rf "$cache_root/palladium/cargo-c-build"
 fi
 
 mkdir -p "$(dirname "$source_dir")" "$prefix"

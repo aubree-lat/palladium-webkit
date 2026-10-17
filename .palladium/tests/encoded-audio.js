@@ -25,7 +25,7 @@ const failures = [];
 const epochs = {encrypt:1,decrypt:1};
 let replacements = 0;
 let detachedAudioWorks = false;
-const workerText = `self.onrtctransform = async event => {
+const workerText = `self.pause=false;self.onmessage=event=>self.pause=Boolean(event.data);self.onrtctransform = async event => {
   const { readable, writable, options } = event.transformer;
   let count = 0;
   let sequence = 0;
@@ -33,6 +33,7 @@ const workerText = `self.onrtctransform = async event => {
     // Fixed key for this synthetic CI test only. No Discord keys are used.
     const key = await crypto.subtle.importKey('raw', new Uint8Array(32).fill(41), 'AES-GCM', false, ['encrypt', 'decrypt']);
     await readable.pipeThrough(new TransformStream({async transform(frame, controller) {
+      if(self.pause)return;
       if (frame.constructor.name !== 'RTCEncodedAudioFrame') throw new Error('incorrect frame type');
       const metadata = frame.getMetadata();
       if (metadata.synchronizationSource === undefined || metadata.rtpTimestamp === undefined) throw new Error('missing RTP metadata');
@@ -50,18 +51,19 @@ const workerText = `self.onrtctransform = async event => {
       controller.enqueue(frame);
       if (++count % 10 === 0) self.postMessage({operation:options.operation,epoch:options.epoch,count});
     }})).pipeTo(writable);
-  } catch (e) { self.postMessage({error:e.name+': '+e.message}); }
+  } catch (e) { self.postMessage({operation:options.operation,epoch:options.epoch,error:e.name+': '+e.message}); }
 };`;
 const workerUrl = URL.createObjectURL(new Blob([workerText], {type:'text/javascript'}));
 function transform(endpoint, operation, epoch=1) {
   epochs[operation]=epoch;
   const worker = new Worker(workerUrl);
   worker.onmessage = event => {
-    if (event.data.error) failures.push(event.data.error);
+    if (event.data.error && epochs[event.data.operation]===event.data.epoch) failures.push(event.data.error);
     else if(epochs[event.data.operation]===event.data.epoch)counts[event.data.operation] = event.data.count;
   };
   workers.push(worker);
   endpoint.transform = new RTCRtpScriptTransform(worker, {operation,epoch});
+  return worker;
 }
 right.ontrack = event => {
   transform(event.receiver, 'decrypt');
@@ -72,7 +74,7 @@ right.ontrack = event => {
 const sender = left.addTransceiver("audio", {direction:"sendonly"}).sender;
 
 
-transform(sender, 'encrypt');
+let currentSenderWorker=transform(sender, 'encrypt');
 await sender.replaceTrack(output.stream.getAudioTracks()[0]);
 try {
   for (let iteration = 0; iteration < 2; iteration++) {
@@ -98,21 +100,24 @@ try {
   const initialPassed = energy>0.01 && counts.encrypt>=10 && counts.decrypt>=10;
   if(initialPassed) {
     for(let epoch=2;epoch<=4;epoch++) {
-      const decodedBefore=counts.decrypt;
-      counts.encrypt=0;
-      transform(sender,'encrypt',epoch);
+      counts.encrypt=0;counts.decrypt=0;
+      currentSenderWorker=transform(sender,'encrypt',epoch);
+      right.getReceivers().forEach(receiver=>transform(receiver,'decrypt',epoch));
       let recovered=false;
       for(let iteration=0;iteration<30;iteration++) {
         await new Promise(resolve=>setTimeout(resolve,100));
         const samples=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(samples);
         energy=samples.reduce((sum,sample)=>sum+sample*sample,0)/samples.length;
-        if(energy>0.01 && counts.encrypt>=10 && counts.decrypt>=decodedBefore+10){recovered=true;break;}
+        if(energy>0.01 && counts.encrypt>=10 && counts.decrypt>=10){recovered=true;break;}
       }
       if(!recovered)break;
       replacements++;
     }
-    sender.transform=null;
+    currentSenderWorker.postMessage(true);
+    await new Promise(resolve=>setTimeout(resolve,600));
+    epochs.encrypt++;epochs.decrypt++;
     right.getReceivers().forEach(receiver=>receiver.transform=null);
+    sender.transform=null;
     await new Promise(resolve=>setTimeout(resolve,800));
     const samples=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(samples);
     energy=samples.reduce((sum,sample)=>sum+sample*sample,0)/samples.length;

@@ -87,6 +87,8 @@ void RTCRtpScriptTransform::setTransformer(RTCRtpScriptTransformer& transformer)
     ASSERT(!isMainThread());
     {
         Locker locker { m_transformerLock };
+        if (m_cancelled.load())
+            return;
         ASSERT(!m_isTransformerInitialized);
         m_isTransformerInitialized = true;
         m_transformer = transformer;
@@ -108,9 +110,10 @@ void RTCRtpScriptTransform::initializeBackendForSender(RTCRtpTransformBackend& b
     initializeTransformer(backend);
 }
 
-void RTCRtpScriptTransform::willClearBackend(RTCRtpTransformBackend&)
+void RTCRtpScriptTransform::willClearBackend(RTCRtpTransformBackend& backend)
 {
-    clear(RTCRtpScriptTransformer::ClearCallback::Yes);
+    backend.clearTransformableFrameCallback();
+    clear(RTCRtpScriptTransformer::ClearCallback::No);
 }
 
 void RTCRtpScriptTransform::initializeTransformer(RTCRtpTransformBackend& backend)
@@ -123,11 +126,11 @@ void RTCRtpScriptTransform::initializeTransformer(RTCRtpTransformBackend& backen
 bool RTCRtpScriptTransform::setupTransformer(Ref<RTCRtpTransformBackend>&& backend)
 {
     Locker locker { m_transformerLock };
-    if (!m_isTransformerInitialized)
+    if (!m_isTransformerInitialized || m_cancelled.load())
         return false;
 
-    m_worker->postTaskToWorkerGlobalScope([transformer = m_transformer, backend = WTF::move(backend)](auto&) mutable {
-        if (transformer)
+    m_worker->postTaskToWorkerGlobalScope([protectedThis = Ref { *this }, transformer = m_transformer, backend = WTF::move(backend)](auto&) mutable {
+        if (transformer && !protectedThis->m_cancelled.load())
             transformer->start(WTF::move(backend));
     });
     return true;
@@ -136,6 +139,8 @@ bool RTCRtpScriptTransform::setupTransformer(Ref<RTCRtpTransformBackend>&& backe
 void RTCRtpScriptTransform::clear(RTCRtpScriptTransformer::ClearCallback clearCallback)
 {
     Locker locker { m_transformerLock };
+    m_cancelled.store(true);
+    m_backend = nullptr;
     m_isTransformerInitialized = false;
     m_worker->postTaskToWorkerGlobalScope([transformer = WTF::move(m_transformer), clearCallback](auto&) mutable {
         if (transformer)

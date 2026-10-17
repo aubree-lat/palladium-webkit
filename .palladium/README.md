@@ -27,11 +27,11 @@ GObject introspection stays enabled for the native Python probes. Full WebKit de
 
 All native probes run again against the relocated package at `/usr/lib/palladium/runtime`, so helper paths and packaged libraries are tested before publication.
 
-Compiled objects and the private prefix survive between runs. The Rust toolchain and Cargo dependency build trees are not part of the checkpoint cache. A job checkpoints before the hosted-runner deadline and automatically queues the next attempt, up to six attempts. Compilation failures stop the workflow. No runtime is published until the sandboxed native probes pass:
+Compiled objects and the private prefix survive between runs. The Rust toolchain is downloaded per job. The cargo-c bootstrap build and crate registry are cached so interrupted setup can resume; its build tree is removed after the tool is installed. A job checkpoints before the hosted-runner deadline and automatically queues the next attempt, up to six attempts. Compilation failures stop the workflow. No runtime is published until the sandboxed native probes pass:
 
 1. PNG, JPEG, GIF, WebP and AVIF decoding.
 2. Decoded synthetic Opus audio with multiple transceivers and renegotiation, including measured tone energy at a virtual speaker output.
-3. AES-GCM worker encryption/decryption, including changed payload lengths, metadata and worker progress checks.
+3. AES-GCM worker encryption/decryption, including changed payload lengths, metadata, worker replacement, explicit transform removal and worker progress checks.
 4. An audible first participant alongside a worker that drops all frames, followed by the delayed participant becoming audible.
 5. Microphone capture, explicit output switching with measured tone energy, and device add/default-change/remove notifications using isolated virtual devices.
 

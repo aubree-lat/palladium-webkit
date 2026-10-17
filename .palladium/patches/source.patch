@@ -82,6 +82,89 @@ index fd0867b4..125b22d5 100644
      RefPtr context = m_context.get();
      if (!context)
          return;
+diff --git a/Source/WebCore/Modules/mediastream/RTCRtpScriptTransform.cpp b/Source/WebCore/Modules/mediastream/RTCRtpScriptTransform.cpp
+index b9714c24..dfab41c7 100644
+--- a/Source/WebCore/Modules/mediastream/RTCRtpScriptTransform.cpp
++++ b/Source/WebCore/Modules/mediastream/RTCRtpScriptTransform.cpp
+@@ -87,6 +87,8 @@ void RTCRtpScriptTransform::setTransformer(RTCRtpScriptTransformer& transformer)
+     ASSERT(!isMainThread());
+     {
+         Locker locker { m_transformerLock };
++        if (m_cancelled.load())
++            return;
+         ASSERT(!m_isTransformerInitialized);
+         m_isTransformerInitialized = true;
+         m_transformer = transformer;
+@@ -108,9 +110,10 @@ void RTCRtpScriptTransform::initializeBackendForSender(RTCRtpTransformBackend& b
+     initializeTransformer(backend);
+ }
+ 
+-void RTCRtpScriptTransform::willClearBackend(RTCRtpTransformBackend&)
++void RTCRtpScriptTransform::willClearBackend(RTCRtpTransformBackend& backend)
+ {
+-    clear(RTCRtpScriptTransformer::ClearCallback::Yes);
++    backend.clearTransformableFrameCallback();
++    clear(RTCRtpScriptTransformer::ClearCallback::No);
+ }
+ 
+ void RTCRtpScriptTransform::initializeTransformer(RTCRtpTransformBackend& backend)
+@@ -123,11 +126,11 @@ void RTCRtpScriptTransform::initializeTransformer(RTCRtpTransformBackend& backen
+ bool RTCRtpScriptTransform::setupTransformer(Ref<RTCRtpTransformBackend>&& backend)
+ {
+     Locker locker { m_transformerLock };
+-    if (!m_isTransformerInitialized)
++    if (!m_isTransformerInitialized || m_cancelled.load())
+         return false;
+ 
+-    m_worker->postTaskToWorkerGlobalScope([transformer = m_transformer, backend = WTF::move(backend)](auto&) mutable {
+-        if (transformer)
++    m_worker->postTaskToWorkerGlobalScope([protectedThis = Ref { *this }, transformer = m_transformer, backend = WTF::move(backend)](auto&) mutable {
++        if (transformer && !protectedThis->m_cancelled.load())
+             transformer->start(WTF::move(backend));
+     });
+     return true;
+@@ -136,6 +139,8 @@ bool RTCRtpScriptTransform::setupTransformer(Ref<RTCRtpTransformBackend>&& backe
+ void RTCRtpScriptTransform::clear(RTCRtpScriptTransformer::ClearCallback clearCallback)
+ {
+     Locker locker { m_transformerLock };
++    m_cancelled.store(true);
++    m_backend = nullptr;
+     m_isTransformerInitialized = false;
+     m_worker->postTaskToWorkerGlobalScope([transformer = WTF::move(m_transformer), clearCallback](auto&) mutable {
+         if (transformer)
+diff --git a/Source/WebCore/Modules/mediastream/RTCRtpScriptTransform.h b/Source/WebCore/Modules/mediastream/RTCRtpScriptTransform.h
+index ffb0fe8c..56408b95 100644
+--- a/Source/WebCore/Modules/mediastream/RTCRtpScriptTransform.h
++++ b/Source/WebCore/Modules/mediastream/RTCRtpScriptTransform.h
+@@ -32,6 +32,7 @@
+ #include <JavaScriptCore/JSCJSValue.h>
+ #include <JavaScriptCore/JSObject.h>
+ #include <JavaScriptCore/Strong.h>
++#include <atomic>
+ #include <wtf/Lock.h>
+ #include <wtf/TZoneMalloc.h>
+ #include <wtf/ThreadSafeRefCounted.h>
+@@ -72,6 +73,7 @@ private:
+     const Ref<Worker> m_worker;
+ 
+     bool m_isAttached { false };
++    std::atomic<bool> m_cancelled { false };
+     RefPtr<RTCRtpTransformBackend> m_backend;
+ 
+     Lock m_transformerLock;
+diff --git a/Source/WebCore/Modules/mediastream/RTCRtpTransform.cpp b/Source/WebCore/Modules/mediastream/RTCRtpTransform.cpp
+index f58224f1..458c11ae 100644
+--- a/Source/WebCore/Modules/mediastream/RTCRtpTransform.cpp
++++ b/Source/WebCore/Modules/mediastream/RTCRtpTransform.cpp
+@@ -72,6 +72,8 @@ void RTCRtpTransform::attachToReceiver(RTCRtpReceiver& receiver, RTCRtpTransform
+         return;
+ 
+     m_transform->initializeBackendForReceiver(*backend);
++    if (previousTransform)
++        previousTransform->backendTransferedToNewTransform();
+ }
+ 
+ void RTCRtpTransform::attachToSender(RTCRtpSender& sender, RTCRtpTransform* previousTransform)
 diff --git a/Source/WebCore/Modules/mediastream/RTCRtpTransformableFrame.h b/Source/WebCore/Modules/mediastream/RTCRtpTransformableFrame.h
 index a6edf51e..44fa3119 100644
 --- a/Source/WebCore/Modules/mediastream/RTCRtpTransformableFrame.h
@@ -255,10 +338,10 @@ index 538d1f73..49ed62cf 100644
      // https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/923
      // gst_util_set_object_arg(G_OBJECT(m_rtcTransceiver.get()), "fec-type", "ulp-red");
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
-index 2ec70d5b..3e8091be 100644
+index 2ec70d5b..b6aa4179 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
 +++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
-@@ -22,24 +22,226 @@
+@@ -22,24 +22,227 @@
  
  #if ENABLE(WEB_RTC) && USE(GSTREAMER_WEBRTC)
  
@@ -402,8 +485,11 @@ index 2ec70d5b..3e8091be 100644
 -    Locker holdLock { m_inputCallbackLock };
 -    m_inputCallback = WTF::move(callback);
 +    Locker locker { m_state->lock };
-+    if (m_generation == m_state->generation)
-+        m_state->callback = WTF::move(callback);
++    if (m_generation != m_state->generation)
++        return;
++    m_generation = ++m_state->generation;
++    m_state->active = true;
++    m_state->callback = WTF::move(callback);
  }
  
  void GStreamerRtpTransformBackend::clearTransformableFrameCallback()
@@ -422,8 +508,6 @@ index 2ec70d5b..3e8091be 100644
 +    if (!m_isAudio)
 +        return;
 +    auto& audio = static_cast<GStreamerAudioTransformableFrame&>(frame);
-+    if (audio.generation() != m_generation)
-+        return;
 +    auto buffer = audio.takeBuffer();
 +    if (!buffer)
 +        return;

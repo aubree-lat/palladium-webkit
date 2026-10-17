@@ -32,6 +32,7 @@
 #include <JavaScriptCore/JSCJSValue.h>
 #include <JavaScriptCore/JSObject.h>
 #include <JavaScriptCore/Strong.h>
+#include <atomic>
 #include <wtf/Lock.h>
 #include <wtf/TZoneMalloc.h>
 #include <wtf/ThreadSafeRefCounted.h>
@@ -72,6 +73,7 @@ private:
     const Ref<Worker> m_worker;
 
     bool m_isAttached { false };
+    std::atomic<bool> m_cancelled { false };
     RefPtr<RTCRtpTransformBackend> m_backend;
 
     Lock m_transformerLock;
