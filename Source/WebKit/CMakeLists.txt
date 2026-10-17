@@ -1450,6 +1450,12 @@ WEBKIT_DEFINE_SUBTARGET_WITH_PREFIX(WebKit WebKitShared
     DIRS DerivedSources)
 
 WEBKIT_FRAMEWORK(WebKit)
+add_custom_target(WebKitGeneratedSerializers DEPENDS ${WebKit_DERIVED_SOURCES_DIR}/GeneratedSerializers.h)
+foreach (_target WebKit WebKitUIProcess WebKitWebProcess WebKitGPUProcess WebKitNetworkProcess WebKitShared)
+    if (TARGET ${_target})
+        add_dependencies(${_target} WebKitGeneratedSerializers)
+    endif ()
+endforeach ()
 if (USE_APPLE_INTERNAL_SDK)
     WEBKIT_TARGET_USE_PGO(WebKit PROFILE WebKit)
 endif ()
