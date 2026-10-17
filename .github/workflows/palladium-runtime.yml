@@ -51,6 +51,7 @@ jobs:
       - run: |
           for script in .palladium/scripts/*.sh; do bash -n "$script"; done
           python3 -m py_compile .palladium/tests/probe.py
+          node .palladium/scripts/check-probes.mjs
           awk '{ print "/" $2 }' .palladium/source-files.sha256 | git sparse-checkout add --stdin
           sha256sum --check .palladium/source-files.sha256
           PALLADIUM_SOURCE_CHECK_ONLY=1 bash .palladium/scripts/prepare-source.sh "$RUNNER_TEMP/source-check"
