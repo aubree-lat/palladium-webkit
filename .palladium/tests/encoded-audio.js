@@ -34,6 +34,7 @@ const workerText = `self.pause=false;self.onmessage=event=>self.pause=Boolean(ev
     const key = await crypto.subtle.importKey('raw', new Uint8Array(32).fill(41), 'AES-GCM', false, ['encrypt', 'decrypt']);
     await readable.pipeThrough(new TransformStream({async transform(frame, controller) {
       if(self.pause)return;
+      if(self.pause)return;
       if (frame.constructor.name !== 'RTCEncodedAudioFrame') throw new Error('incorrect frame type');
       const metadata = frame.getMetadata();
       if (metadata.synchronizationSource === undefined || metadata.rtpTimestamp === undefined) throw new Error('missing RTP metadata');
@@ -64,6 +65,7 @@ function transform(endpoint, operation, epoch=1) {
   workers.push(worker);
   endpoint.transform = new RTCRtpScriptTransform(worker, {operation,epoch});
   return worker;
+  return worker;
 }
 right.ontrack = event => {
   transform(event.receiver, 'decrypt');
@@ -74,7 +76,7 @@ right.ontrack = event => {
 const sender = left.addTransceiver("audio", {direction:"sendonly"}).sender;
 
 
-let currentSenderWorker=transform(sender, 'encrypt');
+let currentSenderWorker=let currentSenderWorker=transform(sender, 'encrypt');
 await sender.replaceTrack(output.stream.getAudioTracks()[0]);
 try {
   for (let iteration = 0; iteration < 2; iteration++) {
