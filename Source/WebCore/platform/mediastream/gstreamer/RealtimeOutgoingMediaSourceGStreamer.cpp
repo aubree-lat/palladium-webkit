@@ -418,6 +418,13 @@ void RealtimeOutgoingMediaSourceGStreamer::replaceTrack(const RefPtr<MediaStream
 
         m_pendingTrackId = trackPrivate ? trackPrivate->id() : emptyString();
         GRefPtr newCaps = adoptGRef(gst_caps_make_writable(caps.leakRef()));
+        if (!m_pendingTrackId.isEmpty() && gst_caps_get_size(newCaps.get())) {
+            auto structure = gst_caps_get_structure(newCaps.get(), 0);
+            if (!gst_structure_has_field(structure, "a-msid")) {
+                auto msid = makeString(m_mediaStreamId, ' ', m_pendingTrackId);
+                gst_structure_set(structure, "a-msid", G_TYPE_STRING, msid.utf8().data(), nullptr);
+            }
+        }
         gst_caps_map_in_place(newCaps.get(), [](auto*, auto* structure, gpointer userData) -> gboolean {
             if (!gst_structure_has_field_typed(structure, "a-msid", G_TYPE_STRING)) [[unlikely]]
                 return TRUE;

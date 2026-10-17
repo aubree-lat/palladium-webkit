@@ -47,6 +47,7 @@ public:
 
     bool isDecoding() const { return m_isDecoding; }
     bool isReady() const { return m_isReady; }
+    void connectTrack();
     const String& trackId() const LIFETIME_BOUND { return m_data.trackId; }
 
 private:
@@ -79,6 +80,7 @@ private:
     GRefPtr<GstElement> m_sink;
     GUniquePtr<GstStructure> m_stats;
     bool m_isReady { false };
+    bool m_isConnected { false };
 
     // https://www.w3.org/TR/webrtc-stats/#dom-rtcinboundrtpstreamstats-totaldecodetime
     MediaTime m_totalVideoDecodeTime { MediaTime::zeroTime() };

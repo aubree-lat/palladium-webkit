@@ -36,11 +36,12 @@ namespace WebCore {
 // before the worker boundary and is deliberately not handled by this bridge.
 class GStreamerAudioTransformableFrame final : public RTCRtpTransformableFrame {
 public:
-    GStreamerAudioTransformableFrame(GstBuffer* buffer, GstPad* output, uint64_t generation, std::shared_ptr<std::atomic<unsigned>> pending)
+    GStreamerAudioTransformableFrame(GstBuffer* buffer, GstPad* output, uint64_t generation, std::shared_ptr<std::atomic<unsigned>> pending, std::shared_ptr<std::atomic<bool>> bindingActive)
         : m_buffer(buffer)
         , m_output(output)
         , m_generation(generation)
         , m_pending(WTF::move(pending))
+        , m_bindingActive(WTF::move(bindingActive))
     {
         ++*m_pending;
         GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
@@ -79,7 +80,7 @@ public:
     void setOptions(const RTCEncodedVideoFrameMetadata&) final { }
     Ref<RTCRtpTransformableFrame> clone() final
     {
-        auto copy = adoptRef(*new GStreamerAudioTransformableFrame(m_buffer.get(), m_output.get(), m_generation, m_pending));
+        auto copy = adoptRef(*new GStreamerAudioTransformableFrame(m_buffer.get(), m_output.get(), m_generation, m_pending, m_bindingActive));
         copy->setData(m_data.span());
         copy->didEnqueueToScript();
         return copy;
@@ -97,6 +98,7 @@ public:
     }
     GstPad* output() const { return m_output.get(); }
     uint64_t generation() const { return m_generation; }
+    const auto& bindingActive() const { return m_bindingActive; }
 
 private:
     GRefPtr<GstBuffer> m_buffer;
@@ -106,6 +108,7 @@ private:
     RTCEncodedAudioFrameMetadata m_metadata;
     uint64_t m_generation;
     std::shared_ptr<std::atomic<unsigned>> m_pending;
+    std::shared_ptr<std::atomic<bool>> m_bindingActive;
     bool m_consumed { false };
     bool m_pendingBudget { true };
 };
@@ -195,10 +198,10 @@ void GStreamerRtpTransformBackend::processTransformedFrame(RTCRtpTransformableFr
             m_state->outputQueue = WorkQueue::create("Palladium Opus transform"_s);
         queue = m_state->outputQueue;
     }
-    queue->dispatch([state = m_state.copyRef(), output = GRefPtr(audio.output()), buffer = WTF::move(buffer), generation = audio.generation()]() mutable {
+    queue->dispatch([state = m_state.copyRef(), output = GRefPtr(audio.output()), buffer = WTF::move(buffer), generation = audio.generation(), bindingActive = audio.bindingActive()]() mutable {
         {
             Locker locker { state->lock };
-            if (generation != state->generation || !state->callback) {
+            if (!*bindingActive || generation != state->generation || !state->callback) {
                 --state->queuedOutputs;
                 return;
             }
@@ -213,12 +216,27 @@ void GStreamerRtpTransformBackend::processTransformedFrame(RTCRtpTransformableFr
 
 void GStreamerRtpTransformBackend::installTransform(GstPad* pad, GstObject* object)
 {
-    if (!pad || !object || g_object_get_data(G_OBJECT(pad), "palladium-opus-probe"))
+    if (!pad || !object)
         return;
-    g_object_set_data(G_OBJECT(pad), "palladium-opus-probe", GINT_TO_POINTER(1));
+    struct Binding {
+        Ref<GStreamerRtpTransformState> state;
+        std::shared_ptr<std::atomic<bool>> active { std::make_shared<std::atomic<bool>>(true) };
+        gulong probe { 0 };
+    };
     auto state = stateFor(object);
-    gst_pad_add_probe(pad, static_cast<GstPadProbeType>(GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST), [](GstPad* pad, GstPadProbeInfo* info, gpointer data) -> GstPadProbeReturn {
-        auto& state = *static_cast<GStreamerRtpTransformState*>(data);
+    auto* previous = static_cast<Binding*>(g_object_get_data(G_OBJECT(pad), "palladium-opus-probe"));
+    if (previous) {
+        if (previous->state.ptr() == state.ptr())
+            return;
+        // Frames already queued by the provisional receiver must not reach the new one.
+        *previous->active = false;
+        g_object_set_data(G_OBJECT(pad), "palladium-opus-probe", nullptr);
+        gst_pad_remove_probe(pad, previous->probe);
+    }
+    auto* binding = new Binding { WTF::move(state) };
+    binding->probe = gst_pad_add_probe(pad, static_cast<GstPadProbeType>(GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST), [](GstPad* pad, GstPadProbeInfo* info, gpointer data) -> GstPadProbeReturn {
+        auto& binding = *static_cast<Binding*>(data);
+        auto& state = binding.state.get();
         Locker locker { state.lock };
         if (!state.active)
             return GST_PAD_PROBE_OK;
@@ -233,7 +251,7 @@ void GStreamerRtpTransformBackend::installTransform(GstPad* pad, GstObject* obje
             return GST_PAD_PROBE_DROP;
         auto transform = [&](GstBuffer* buffer) {
             if (*state.pending < 128)
-                state.callback(adoptRef(*new GStreamerAudioTransformableFrame(buffer, output.get(), state.generation, state.pending)));
+                state.callback(adoptRef(*new GStreamerAudioTransformableFrame(buffer, output.get(), state.generation, state.pending, binding.active)));
         };
         if (info->type & GST_PAD_PROBE_TYPE_BUFFER_LIST) {
             auto* list = GST_PAD_PROBE_INFO_BUFFER_LIST(info);
@@ -242,7 +260,8 @@ void GStreamerRtpTransformBackend::installTransform(GstPad* pad, GstObject* obje
         } else
             transform(GST_PAD_PROBE_INFO_BUFFER(info));
         return GST_PAD_PROBE_DROP;
-    }, &state.leakRef(), [](gpointer data) { static_cast<GStreamerRtpTransformState*>(data)->deref(); });
+    }, binding, [](gpointer data) { delete static_cast<Binding*>(data); });
+    g_object_set_data(G_OBJECT(pad), "palladium-opus-probe", binding);
 }
 
 } // namespace WebCore

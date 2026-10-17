@@ -54,6 +54,7 @@ public:
     void link();
     const GRefPtr<GstPad>& pad() const { return m_webrtcSinkPad; }
     void setSinkPad(GRefPtr<GstPad>&&);
+    void setInitialTransceiver(const GRefPtr<GstWebRTCRTPTransceiver>& transceiver) { m_transceiver = transceiver; }
 
     GRefPtr<GstWebRTCRTPSender> sender() const { return m_sender; }
     GRefPtr<GstElement> bin() const { return m_bin; }

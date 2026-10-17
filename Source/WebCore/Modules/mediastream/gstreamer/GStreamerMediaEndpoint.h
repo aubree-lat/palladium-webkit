@@ -102,7 +102,7 @@ public:
     ExceptionOr<Backends> addTransceiver(MediaStreamTrack&, const RTCRtpTransceiverInit&, PeerConnectionBackend::IgnoreNegotiationNeededFlag);
     std::unique_ptr<GStreamerRtpTransceiverBackend> transceiverBackendFromSender(GStreamerRtpSenderBackend&);
 
-    GStreamerRtpSenderBackend::Source createSourceForTrack(MediaStreamTrack&);
+    GStreamerRtpSenderBackend::Source createSourceForTrack(MediaStreamTrack&, GStreamerRtpSenderBackend* = nullptr);
 
     void collectTransceivers(Vector<Ref<RTCRtpTransceiver>>&&);
 
@@ -118,7 +118,7 @@ public:
     void processStatsItem(const GValue*);
 #endif
 
-    void connectIncomingTrack(WebRTCTrackData&);
+    bool connectIncomingTrack(WebRTCTrackData&);
     void notifyFirstPacketReceived(WebRTCTrackData&);
 
     void startRTCLogs();

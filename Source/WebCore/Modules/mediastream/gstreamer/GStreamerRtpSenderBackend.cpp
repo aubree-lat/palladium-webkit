@@ -25,6 +25,7 @@
 #include "ContextDestructionObserverInlines.h"
 #include "GStreamerDTMFSenderBackend.h"
 #include "GStreamerDtlsTransportBackend.h"
+#include "GStreamerMediaEndpoint.h"
 #include "GStreamerPeerConnectionBackend.h"
 #include "GStreamerRtpSenderTransformBackend.h"
 #include "GStreamerWebRTCUtils.h"
@@ -163,6 +164,12 @@ bool GStreamerRtpSenderBackend::replaceTrack(RTCRtpSender& sender, MediaStreamTr
 
     auto previousTrackId = sender.trackId();
     RefPtr newTrack = track;
+    if (!hasSource() && newTrack) {
+        auto source = peerConnectionBackend->m_endpoint->createSourceForTrack(*newTrack, this);
+        if (std::holds_alternative<std::nullptr_t>(source))
+            return false;
+        setSource(WTF::move(source));
+    }
     switchOn(m_source, [&](Ref<RealtimeOutgoingAudioSourceGStreamer>& source) {
         source->replaceTrack(newTrack);
     }, [&](Ref<RealtimeOutgoingVideoSourceGStreamer>& source) {

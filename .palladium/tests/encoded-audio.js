@@ -71,22 +71,26 @@ right.ontrack = event => {
   receiverSource = audio.createMediaStreamSource(new MediaStream([event.track]));
   receiverSource.connect(analyser);
 };
-const sender = left.addTransceiver("audio", {direction:"sendonly"}).sender;
-
-
-let currentSenderWorker=transform(sender, 'encrypt');
-await sender.replaceTrack(output.stream.getAudioTracks()[0]);
+// Discord first creates a receiver-only transceiver, negotiates, then attaches the microphone.
+const transceiver = left.addTransceiver("audio", {direction:"recvonly"});
+const sender = transceiver.sender;
+async function negotiate() {
+  const offer = await left.createOffer();
+  await left.setLocalDescription(offer);
+  await right.setRemoteDescription(offer);
+  for (const candidate of rightQueue.splice(0)) await right.addIceCandidate(candidate);
+  const answer = await right.createAnswer();
+  await right.setLocalDescription(answer);
+  await left.setRemoteDescription(answer);
+  for (const candidate of leftQueue.splice(0)) await left.addIceCandidate(candidate);
+}
+let currentSenderWorker;
 try {
-  for (let iteration = 0; iteration < 2; iteration++) {
-    const offer = await left.createOffer();
-    await left.setLocalDescription(offer);
-    await right.setRemoteDescription(offer);
-    for (const candidate of rightQueue.splice(0)) await right.addIceCandidate(candidate);
-    const answer = await right.createAnswer();
-    await right.setLocalDescription(answer);
-    await left.setRemoteDescription(answer);
-    for (const candidate of leftQueue.splice(0)) await left.addIceCandidate(candidate);
-  }
+  await negotiate();
+  transceiver.direction = "sendonly";
+  currentSenderWorker = transform(sender, 'encrypt');
+  await sender.replaceTrack(output.stream.getAudioTracks()[0]);
+  for (let iteration = 0; iteration < 2; iteration++) await negotiate();
   let energy = 0;
   let inbound = [];
   for (let attempt = 0; attempt < 40; attempt++) {

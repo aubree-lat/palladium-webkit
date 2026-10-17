@@ -178,13 +178,124 @@ index a6edf51e..44fa3119 100644
      virtual Ref<RTCRtpTransformableFrame> clone() = 0;
      virtual void setOptions(const RTCEncodedAudioFrameMetadata&) = 0;
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
-index f9dd520c..3ff468fe 100644
+index f9dd520c..0fcf4c03 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
 +++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
-@@ -1603,40 +1603,11 @@ void GStreamerMediaEndpoint::connectIncomingTrack(WebRTCTrackData& data)
+@@ -32,6 +32,7 @@
+ #include "GStreamerRegistryScanner.h"
+ #include "GStreamerRtpReceiverBackend.h"
+ #include "GStreamerRtpTransceiverBackend.h"
++#include "GStreamerRtpTransformBackend.h"
+ #include "GStreamerSctpTransportBackend.h"
+ #include "GStreamerWebRTCUtils.h"
+ #include "JSDOMConvert.h"
+@@ -1054,6 +1055,8 @@ void GStreamerMediaEndpoint::doSetRemoteDescription(const RTCSessionDescription&
+         }
+ 
+         peerConnectionBackend->setRemoteDescriptionSucceeded(WTF::move(descriptions), WTF::move(transceiverStates), transport ? makeUnique<GStreamerSctpTransportBackend>(WTF::move(transport)) : nullptr, maxMessageSize);
++        for (auto& processor : m_trackProcessors.values())
++            processor->connectTrack();
+     }, [protectedThis = Ref(*this), this](const GError* error) {
+         if (protectedThis->isStopped())
              return;
+@@ -1542,7 +1545,7 @@ String GStreamerMediaEndpoint::trackIdFromSDPMedia(const GstSDPMedia& media)
+     return components[1];
+ }
+ 
+-void GStreamerMediaEndpoint::connectIncomingTrack(WebRTCTrackData& data)
++bool GStreamerMediaEndpoint::connectIncomingTrack(WebRTCTrackData& data)
+ {
+     ASSERT(isMainThread());
+ 
+@@ -1554,14 +1557,55 @@ void GStreamerMediaEndpoint::connectIncomingTrack(WebRTCTrackData& data)
+             if (encodingName == "TELEPHONE-EVENT"_s) {
+                 GST_DEBUG_OBJECT(pipeline(), "Starting incoming DTMF stream");
+                 gst_element_set_state(m_pipeline.get(), GST_STATE_PLAYING);
+-                return;
++                return false;
+             }
+         }
      }
  
+     auto peerConnectionBackend = this->peerConnectionBackend();
+     if (!peerConnectionBackend)
+-        return;
++        return false;
++
++    // A bundled SSRC can arrive before its m-line is signaled. In that case webrtcbin
++    // initially assigns the pad to the first transceiver with a matching payload type.
++    // Prefer the explicit SSRC association and defer attachment while it is unknown.
++    GUniqueOutPtr<GstWebRTCSessionDescription> remoteDescription;
++    g_object_get(m_webrtcBin.get(), "remote-description", &remoteDescription.outPtr(), nullptr);
++    String resolvedMid;
++    bool currentMidCanSend = false;
++    if (remoteDescription) {
++        auto ssrcPrefix = makeString(data.ssrc, ' ');
++        for (unsigned i = 0; i < gst_sdp_message_medias_len(remoteDescription->sdp); ++i) {
++            auto media = gst_sdp_message_get_media(remoteDescription->sdp, i);
++            auto mid = String::fromUTF8(gst_sdp_media_get_attribute_val(media, "mid"));
++            auto direction = getDirectionFromSDPMedia(media);
++            bool canSend = direction == GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY || direction == GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV;
++            if (mid == data.mid)
++                currentMidCanSend = canSend;
++            if (!canSend)
++                continue;
++            for (unsigned j = 0; j < gst_sdp_media_attributes_len(media); ++j) {
++                auto attribute = gst_sdp_media_get_attribute(media, j);
++                if (g_strcmp0(attribute->key, "ssrc"))
++                    continue;
++                if (!String::fromUTF8(attribute->value).startsWith(ssrcPrefix))
++                    continue;
++                resolvedMid = mid;
++                data.trackId = trackIdFromSDPMedia(*media);
++                break;
++            }
++            if (!resolvedMid.isEmpty())
++                break;
++        }
++    }
++    if (!resolvedMid.isEmpty()) {
++        if (data.mid != resolvedMid)
++            GST_DEBUG_OBJECT(m_pipeline.get(), "Routing incoming track to its signaled transceiver");
++        data.mid = WTF::move(resolvedMid);
++    } else if (!currentMidCanSend) {
++        GST_DEBUG_OBJECT(m_pipeline.get(), "Deferring incoming track until its SSRC is signaled");
++        return false;
++    }
+ 
+     // NOTE: Here ideally we should match WebKit-side transceivers with data.transceiver but we
+     // cannot because in some situations (simulcast, mostly), we can end-up with multiple webrtcbin
+@@ -1583,61 +1627,38 @@ void GStreamerMediaEndpoint::connectIncomingTrack(WebRTCTrackData& data)
+         const auto media = gst_sdp_message_get_media(description->sdp, mLineIndex);
+         if (!media) [[unlikely]] {
+             GST_WARNING_OBJECT(m_pipeline.get(), "SDP media for transceiver %u not found, skipping incoming track setup", mLineIndex);
+-            return;
++            return false;
+         }
+         const auto& trackId = data.trackId;
+         transceiver = peerConnectionBackend->addInternalTransceiver(makeUniqueRef<GStreamerRtpTransceiverBackend>(WTF::move(rtcTransceiver)), data.type, trackId.isolatedCopy());
+         GST_DEBUG_OBJECT(m_pipeline.get(), "New remote transceiver created for track");
+     }
+ 
++    GRefPtr<GstWebRTCRTPReceiver> receiver;
++    auto rtcTransceiver = static_cast<GStreamerRtpTransceiverBackend&>(transceiver->backend()).rtcTransceiver();
++    g_object_get(rtcTransceiver, "receiver", &receiver.outPtr(), nullptr);
++    GStreamerRtpTransformBackend::installTransform(m_trackProcessors.get(data.ssrc)->pad().get(), GST_OBJECT(receiver.get()));
++
+     GRefPtr mediaStreamBin = adoptGRef(gst_bin_get_by_name(GST_BIN_CAST(m_pipeline.get()), data.mediaStreamBinName.ascii().data()));
+     auto& track = transceiver->receiver().track();
+     auto& source = track.privateTrack().source();
+     if (source.isIncomingAudioSource()) {
+         auto& audioSource = static_cast<RealtimeIncomingAudioSourceGStreamer&>(source);
+         if (!audioSource.setBin(WTF::move(mediaStreamBin)))
+-            return;
++            return false;
+     } else if (source.isIncomingVideoSource()) {
+         auto& videoSource = static_cast<RealtimeIncomingVideoSourceGStreamer&>(source);
+         if (!videoSource.setBin(WTF::move(mediaStreamBin)))
+-            return;
+-    }
+-
 -    m_pendingIncomingTracks.append(&track.privateTrack());
 -
 -    unsigned totalExpectedMediaTracks = 0;
@@ -208,8 +319,9 @@ index f9dd520c..3ff468fe 100644
 -    if (m_pendingIncomingTracks.size() < totalExpectedMediaTracks) {
 -        GST_DEBUG_OBJECT(m_pipeline.get(), "Only %zu track(s) received so far", m_pendingIncomingTracks.size());
 -        return;
--    }
--
++            return false;
+     }
+ 
      GST_DEBUG_OBJECT(m_pipeline.get(), "Incoming stream %s ready, notifying observers", data.mediaStreamId.ascii().data());
 -    for (auto& track : m_pendingIncomingTracks) {
 -        GST_DEBUG_OBJECT(m_pipeline.get(), "Incoming stream has track %s", track->id().utf8().data());
@@ -223,12 +335,79 @@ index f9dd520c..3ff468fe 100644
  
 -    m_pendingIncomingTracks.clear();
      gst_element_set_state(m_pipeline.get(), GST_STATE_PLAYING);
++    return true;
  }
  
+ void GStreamerMediaEndpoint::notifyFirstPacketReceived(WebRTCTrackData& data)
+@@ -1974,9 +1995,11 @@ ExceptionOr<GStreamerMediaEndpoint::Backends> GStreamerMediaEndpoint::createTran
+ 
+     GUniquePtr<GstStructure> parameters(gst_structure_copy(initData.get()));
+     switchOn(source, [&](Ref<RealtimeOutgoingAudioSourceGStreamer>& source) {
++        source->setInitialTransceiver(rtcTransceiver);
+         configureSource(source, WTF::move(parameters));
+         m_unlinkedOutgoingSources.append(source.ptr());
+     }, [&](Ref<RealtimeOutgoingVideoSourceGStreamer>& source) {
++        source->setInitialTransceiver(rtcTransceiver);
+         configureSource(source, WTF::move(parameters));
+         m_unlinkedOutgoingSources.append(source.ptr());
+     }, [](std::nullptr_t&) {
+@@ -2006,11 +2029,31 @@ ExceptionOr<GStreamerMediaEndpoint::Backends> GStreamerMediaEndpoint::addTransce
+     return createTransceiverBackends(trackKind, init, WTF::move(source), ignoreNegotiationNeededFlag);
+ }
+ 
+-GStreamerRtpSenderBackend::Source GStreamerMediaEndpoint::createSourceForTrack(MediaStreamTrack& track)
++GStreamerRtpSenderBackend::Source GStreamerMediaEndpoint::createSourceForTrack(MediaStreamTrack& track, GStreamerRtpSenderBackend* sender)
+ {
++    GStreamerRtpSenderBackend::Source source;
+     if (track.privateTrack().isAudio())
+-        return RealtimeOutgoingAudioSourceGStreamer::create(m_ssrcGenerator, track.mediaStreamId(), track);
+-    return RealtimeOutgoingVideoSourceGStreamer::create(m_ssrcGenerator, track.mediaStreamId(), track);
++        source = RealtimeOutgoingAudioSourceGStreamer::create(m_ssrcGenerator, track.mediaStreamId(), track);
++    else
++        source = RealtimeOutgoingVideoSourceGStreamer::create(m_ssrcGenerator, track.mediaStreamId(), track);
++    if (!sender)
++        return source;
++
++    auto transceiver = transceiverBackendFromSender(*sender);
++    if (!transceiver)
++        return nullptr;
++    auto configure = [&](auto& outgoing) {
++        outgoing->setMediaStreamID("-"_s);
++        outgoing->setInitialTransceiver(GRefPtr<GstWebRTCRTPTransceiver>(transceiver->rtcTransceiver()));
++        configureSource(outgoing.get(), nullptr);
++        m_unlinkedOutgoingSources.append(outgoing.ptr());
++    };
++    switchOn(source, [&](Ref<RealtimeOutgoingAudioSourceGStreamer>& outgoing) {
++        configure(outgoing);
++    }, [&](Ref<RealtimeOutgoingVideoSourceGStreamer>& outgoing) {
++        configure(outgoing);
++    }, [](std::nullptr_t&) { });
++    return source;
+ }
+ 
+ ExceptionOr<GStreamerMediaEndpoint::Backends> GStreamerMediaEndpoint::addTransceiver(MediaStreamTrack& track, const RTCRtpTransceiverInit& init, PeerConnectionBackend::IgnoreNegotiationNeededFlag ignoreNegotiationNeededFlag)
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.h b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.h
-index fd4bed8b..495ccbc6 100644
+index fd4bed8b..dcfda506 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.h
 +++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.h
+@@ -102,7 +102,7 @@ public:
+     ExceptionOr<Backends> addTransceiver(MediaStreamTrack&, const RTCRtpTransceiverInit&, PeerConnectionBackend::IgnoreNegotiationNeededFlag);
+     std::unique_ptr<GStreamerRtpTransceiverBackend> transceiverBackendFromSender(GStreamerRtpSenderBackend&);
+ 
+-    GStreamerRtpSenderBackend::Source createSourceForTrack(MediaStreamTrack&);
++    GStreamerRtpSenderBackend::Source createSourceForTrack(MediaStreamTrack&, GStreamerRtpSenderBackend* = nullptr);
+ 
+     void collectTransceivers(Vector<Ref<RTCRtpTransceiver>>&&);
+ 
+@@ -118,7 +118,7 @@ public:
+     void processStatsItem(const GValue*);
+ #endif
+ 
+-    void connectIncomingTrack(WebRTCTrackData&);
++    bool connectIncomingTrack(WebRTCTrackData&);
+     void notifyFirstPacketReceived(WebRTCTrackData&);
+ 
+     void startRTCLogs();
 @@ -224,7 +224,6 @@ private:
  
      bool m_shouldIgnoreNegotiationNeededSignal { false };
@@ -280,10 +459,31 @@ index 6e4f1e5b..57cd502e 100644
  
  bool GStreamerRtpReceiverTransformBackend::requestKeyFrame(const String&)
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp
-index 7de865f8..637707bf 100644
+index 7de865f8..723c137c 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp
 +++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpSenderBackend.cpp
-@@ -294,6 +294,8 @@ std::unique_ptr<RTCDTMFSenderBackend> GStreamerRtpSenderBackend::createDTMFBacke
+@@ -25,6 +25,7 @@
+ #include "ContextDestructionObserverInlines.h"
+ #include "GStreamerDTMFSenderBackend.h"
+ #include "GStreamerDtlsTransportBackend.h"
++#include "GStreamerMediaEndpoint.h"
+ #include "GStreamerPeerConnectionBackend.h"
+ #include "GStreamerRtpSenderTransformBackend.h"
+ #include "GStreamerWebRTCUtils.h"
+@@ -163,6 +164,12 @@ bool GStreamerRtpSenderBackend::replaceTrack(RTCRtpSender& sender, MediaStreamTr
+ 
+     auto previousTrackId = sender.trackId();
+     RefPtr newTrack = track;
++    if (!hasSource() && newTrack) {
++        auto source = peerConnectionBackend->m_endpoint->createSourceForTrack(*newTrack, this);
++        if (std::holds_alternative<std::nullptr_t>(source))
++            return false;
++        setSource(WTF::move(source));
++    }
+     switchOn(m_source, [&](Ref<RealtimeOutgoingAudioSourceGStreamer>& source) {
+         source->replaceTrack(newTrack);
+     }, [&](Ref<RealtimeOutgoingVideoSourceGStreamer>& source) {
+@@ -294,6 +301,8 @@ std::unique_ptr<RTCDTMFSenderBackend> GStreamerRtpSenderBackend::createDTMFBacke
  
  Ref<RTCRtpTransformBackend> GStreamerRtpSenderBackend::rtcRtpTransformBackend()
  {
@@ -338,10 +538,10 @@ index 538d1f73..49ed62cf 100644
      // https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/923
      // gst_util_set_object_arg(G_OBJECT(m_rtcTransceiver.get()), "fec-type", "ulp-red");
 diff --git a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
-index 2ec70d5b..b6aa4179 100644
+index 2ec70d5b..6cf7d1c7 100644
 --- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
 +++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerRtpTransformBackend.cpp
-@@ -22,24 +22,227 @@
+@@ -22,24 +22,246 @@
  
  #if ENABLE(WEB_RTC) && USE(GSTREAMER_WEBRTC)
  
@@ -360,11 +560,12 @@ index 2ec70d5b..b6aa4179 100644
 +// before the worker boundary and is deliberately not handled by this bridge.
 +class GStreamerAudioTransformableFrame final : public RTCRtpTransformableFrame {
 +public:
-+    GStreamerAudioTransformableFrame(GstBuffer* buffer, GstPad* output, uint64_t generation, std::shared_ptr<std::atomic<unsigned>> pending)
++    GStreamerAudioTransformableFrame(GstBuffer* buffer, GstPad* output, uint64_t generation, std::shared_ptr<std::atomic<unsigned>> pending, std::shared_ptr<std::atomic<bool>> bindingActive)
 +        : m_buffer(buffer)
 +        , m_output(output)
 +        , m_generation(generation)
 +        , m_pending(WTF::move(pending))
++        , m_bindingActive(WTF::move(bindingActive))
 +    {
 +        ++*m_pending;
 +        GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
@@ -403,7 +604,7 @@ index 2ec70d5b..b6aa4179 100644
 +    void setOptions(const RTCEncodedVideoFrameMetadata&) final { }
 +    Ref<RTCRtpTransformableFrame> clone() final
 +    {
-+        auto copy = adoptRef(*new GStreamerAudioTransformableFrame(m_buffer.get(), m_output.get(), m_generation, m_pending));
++        auto copy = adoptRef(*new GStreamerAudioTransformableFrame(m_buffer.get(), m_output.get(), m_generation, m_pending, m_bindingActive));
 +        copy->setData(m_data.span());
 +        copy->didEnqueueToScript();
 +        return copy;
@@ -421,6 +622,7 @@ index 2ec70d5b..b6aa4179 100644
 +    }
 +    GstPad* output() const { return m_output.get(); }
 +    uint64_t generation() const { return m_generation; }
++    const auto& bindingActive() const { return m_bindingActive; }
 +
 +private:
 +    GRefPtr<GstBuffer> m_buffer;
@@ -430,6 +632,7 @@ index 2ec70d5b..b6aa4179 100644
 +    RTCEncodedAudioFrameMetadata m_metadata;
 +    uint64_t m_generation;
 +    std::shared_ptr<std::atomic<unsigned>> m_pending;
++    std::shared_ptr<std::atomic<bool>> m_bindingActive;
 +    bool m_consumed { false };
 +    bool m_pendingBudget { true };
 +};
@@ -522,10 +725,10 @@ index 2ec70d5b..b6aa4179 100644
 +            m_state->outputQueue = WorkQueue::create("Palladium Opus transform"_s);
 +        queue = m_state->outputQueue;
 +    }
-+    queue->dispatch([state = m_state.copyRef(), output = GRefPtr(audio.output()), buffer = WTF::move(buffer), generation = audio.generation()]() mutable {
++    queue->dispatch([state = m_state.copyRef(), output = GRefPtr(audio.output()), buffer = WTF::move(buffer), generation = audio.generation(), bindingActive = audio.bindingActive()]() mutable {
 +        {
 +            Locker locker { state->lock };
-+            if (generation != state->generation || !state->callback) {
++            if (!*bindingActive || generation != state->generation || !state->callback) {
 +                --state->queuedOutputs;
 +                return;
 +            }
@@ -542,12 +745,27 @@ index 2ec70d5b..b6aa4179 100644
 +void GStreamerRtpTransformBackend::installTransform(GstPad* pad, GstObject* object)
  {
 -    notImplemented();
-+    if (!pad || !object || g_object_get_data(G_OBJECT(pad), "palladium-opus-probe"))
++    if (!pad || !object)
 +        return;
-+    g_object_set_data(G_OBJECT(pad), "palladium-opus-probe", GINT_TO_POINTER(1));
++    struct Binding {
++        Ref<GStreamerRtpTransformState> state;
++        std::shared_ptr<std::atomic<bool>> active { std::make_shared<std::atomic<bool>>(true) };
++        gulong probe { 0 };
++    };
 +    auto state = stateFor(object);
-+    gst_pad_add_probe(pad, static_cast<GstPadProbeType>(GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST), [](GstPad* pad, GstPadProbeInfo* info, gpointer data) -> GstPadProbeReturn {
-+        auto& state = *static_cast<GStreamerRtpTransformState*>(data);
++    auto* previous = static_cast<Binding*>(g_object_get_data(G_OBJECT(pad), "palladium-opus-probe"));
++    if (previous) {
++        if (previous->state.ptr() == state.ptr())
++            return;
++        // Frames already queued by the provisional receiver must not reach the new one.
++        *previous->active = false;
++        g_object_set_data(G_OBJECT(pad), "palladium-opus-probe", nullptr);
++        gst_pad_remove_probe(pad, previous->probe);
++    }
++    auto* binding = new Binding { WTF::move(state) };
++    binding->probe = gst_pad_add_probe(pad, static_cast<GstPadProbeType>(GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST), [](GstPad* pad, GstPadProbeInfo* info, gpointer data) -> GstPadProbeReturn {
++        auto& binding = *static_cast<Binding*>(data);
++        auto& state = binding.state.get();
 +        Locker locker { state.lock };
 +        if (!state.active)
 +            return GST_PAD_PROBE_OK;
@@ -562,7 +780,7 @@ index 2ec70d5b..b6aa4179 100644
 +            return GST_PAD_PROBE_DROP;
 +        auto transform = [&](GstBuffer* buffer) {
 +            if (*state.pending < 128)
-+                state.callback(adoptRef(*new GStreamerAudioTransformableFrame(buffer, output.get(), state.generation, state.pending)));
++                state.callback(adoptRef(*new GStreamerAudioTransformableFrame(buffer, output.get(), state.generation, state.pending, binding.active)));
 +        };
 +        if (info->type & GST_PAD_PROBE_TYPE_BUFFER_LIST) {
 +            auto* list = GST_PAD_PROBE_INFO_BUFFER_LIST(info);
@@ -571,7 +789,8 @@ index 2ec70d5b..b6aa4179 100644
 +        } else
 +            transform(GST_PAD_PROBE_INFO_BUFFER(info));
 +        return GST_PAD_PROBE_DROP;
-+    }, &state.leakRef(), [](gpointer data) { static_cast<GStreamerRtpTransformState*>(data)->deref(); });
++    }, binding, [](gpointer data) { delete static_cast<Binding*>(data); });
++    g_object_set_data(G_OBJECT(pad), "palladium-opus-probe", binding);
  }
  
  } // namespace WebCore
@@ -848,7 +1067,7 @@ index 02ef6de3..20bca0e1 100644
      // ref() and deref() do nothing because this object is a singleton.
      void ref() const final { }
 diff --git a/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.cpp b/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.cpp
-index 9310c1b3..50ed4803 100644
+index 9310c1b3..1f79ef4e 100644
 --- a/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.cpp
 +++ b/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.cpp
 @@ -22,6 +22,7 @@
@@ -881,8 +1100,49 @@ index 9310c1b3..50ed4803 100644
      auto endPoint = m_endPoint.get();
      if (!endPoint || endPoint->isStopped())
          return;
+@@ -417,10 +426,19 @@ void GStreamerIncomingTrackProcessor::trackReady()
+     callOnMainThread([endPoint = protect(*endPoint), this] {
+         if (endPoint->isStopped())
+             return;
+-        endPoint->connectIncomingTrack(m_data);
++        connectTrack();
+     });
+ }
+ 
++void GStreamerIncomingTrackProcessor::connectTrack()
++{
++    ASSERT(isMainThread());
++    auto endPoint = m_endPoint.get();
++    if (!endPoint || endPoint->isStopped() || !m_isReady || m_isConnected)
++        return;
++    m_isConnected = endPoint->connectIncomingTrack(m_data);
++}
++
+ void GStreamerIncomingTrackProcessor::trackHasReceivedFirstPacket()
+ {
+     auto endPoint = m_endPoint.get();
+diff --git a/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.h b/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.h
+index 10811a76..6def48cf 100644
+--- a/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.h
++++ b/Source/WebCore/platform/mediastream/gstreamer/GStreamerIncomingTrackProcessor.h
+@@ -47,6 +47,7 @@ public:
+ 
+     bool isDecoding() const { return m_isDecoding; }
+     bool isReady() const { return m_isReady; }
++    void connectTrack();
+     const String& trackId() const LIFETIME_BOUND { return m_data.trackId; }
+ 
+ private:
+@@ -79,6 +80,7 @@ private:
+     GRefPtr<GstElement> m_sink;
+     GUniquePtr<GstStructure> m_stats;
+     bool m_isReady { false };
++    bool m_isConnected { false };
+ 
+     // https://www.w3.org/TR/webrtc-stats/#dom-rtcinboundrtpstreamstats-totaldecodetime
+     MediaTime m_totalVideoDecodeTime { MediaTime::zeroTime() };
 diff --git a/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.cpp b/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.cpp
-index 99473dc0..a6e22f39 100644
+index 99473dc0..1b28424b 100644
 --- a/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.cpp
 +++ b/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.cpp
 @@ -23,6 +23,7 @@
@@ -905,6 +1165,32 @@ index 99473dc0..a6e22f39 100644
      checkMid();
      g_signal_connect_swapped(m_transceiver.get(), "notify::mid", G_CALLBACK(+[](RealtimeOutgoingMediaSourceGStreamer* source) {
          source->checkMid();
+@@ -412,6 +418,13 @@ void RealtimeOutgoingMediaSourceGStreamer::replaceTrack(const RefPtr<MediaStream
+ 
+         m_pendingTrackId = trackPrivate ? trackPrivate->id() : emptyString();
+         GRefPtr newCaps = adoptGRef(gst_caps_make_writable(caps.leakRef()));
++        if (!m_pendingTrackId.isEmpty() && gst_caps_get_size(newCaps.get())) {
++            auto structure = gst_caps_get_structure(newCaps.get(), 0);
++            if (!gst_structure_has_field(structure, "a-msid")) {
++                auto msid = makeString(m_mediaStreamId, ' ', m_pendingTrackId);
++                gst_structure_set(structure, "a-msid", G_TYPE_STRING, msid.utf8().data(), nullptr);
++            }
++        }
+         gst_caps_map_in_place(newCaps.get(), [](auto*, auto* structure, gpointer userData) -> gboolean {
+             if (!gst_structure_has_field_typed(structure, "a-msid", G_TYPE_STRING)) [[unlikely]]
+                 return TRUE;
+diff --git a/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.h b/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.h
+index 73ef2cad..9134136e 100644
+--- a/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.h
++++ b/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.h
+@@ -54,6 +54,7 @@ public:
+     void link();
+     const GRefPtr<GstPad>& pad() const { return m_webrtcSinkPad; }
+     void setSinkPad(GRefPtr<GstPad>&&);
++    void setInitialTransceiver(const GRefPtr<GstWebRTCRTPTransceiver>& transceiver) { m_transceiver = transceiver; }
+ 
+     GRefPtr<GstWebRTCRTPSender> sender() const { return m_sender; }
+     GRefPtr<GstElement> bin() const { return m_bin; }
 diff --git a/Source/WebKit/CMakeLists.txt b/Source/WebKit/CMakeLists.txt
 index 85b2d74e..9d0aa53f 100644
 --- a/Source/WebKit/CMakeLists.txt

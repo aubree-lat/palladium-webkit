@@ -6,7 +6,6 @@ import sys
 import subprocess
 import threading
 from pathlib import Path
-from urllib.parse import unquote
 
 import gi
 
@@ -27,7 +26,7 @@ webview.set_settings(settings)
 window.add(webview)
 window.show_all()
 
-script = "Promise.resolve().then(async function(){" + Path(sys.argv[1]).read_text(encoding="utf-8") + "}).then(function(result){document.title='WEBKIT_RESULT:'+encodeURIComponent(JSON.stringify(result))}).catch(function(e){document.title='WEBKIT_RESULT:'+encodeURIComponent(JSON.stringify({ok:false,error:e.name+': '+e.message,stage:document.title}))});"
+script = "Promise.resolve().then(async function(){" + Path(sys.argv[1]).read_text(encoding="utf-8") + "}).then(function(result){window.webkit.messageHandlers.palladiumProbe.postMessage(JSON.stringify(result))}).catch(function(e){window.webkit.messageHandlers.palladiumProbe.postMessage(JSON.stringify({ok:false,error:e.name+': '+e.message,stage:document.title}))});"
 
 exit_status = 3
 control_module = None
@@ -97,9 +96,12 @@ def poll_title():
             Gtk.main_quit()
             return False
         return True
-    if not title.startswith("WEBKIT_RESULT:"):
-        return True
-    result = json.loads(unquote(title[len("WEBKIT_RESULT:"):]))
+    return True
+
+
+def received_result(manager, message):
+    global exit_status
+    result = json.loads(message.get_js_value().to_string())
     result["webkitVersion"] = "%s.%s.%s" % (
         WebKit2.get_major_version(),
         WebKit2.get_minor_version(),
@@ -142,6 +144,9 @@ def timed_out():
 
 
 webview.connect("load-changed", on_load)
+manager = webview.get_user_content_manager()
+manager.register_script_message_handler("palladiumProbe")
+manager.connect("script-message-received::palladiumProbe", received_result)
 webview.load_html("<html><body>palladium webkit probe</body></html>", "https://discord.com/")
 GLib.timeout_add_seconds(30, timed_out)
 Gtk.main()

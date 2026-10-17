@@ -5,6 +5,8 @@ Palladium's Linux runtime, based on WebKitGTK 2.54.1. This branch keeps a small 
 ## Changes
 
 - Incoming tracks become ready independently of silent or delayed participants. Repeated track-ready notifications are ignored.
+- A microphone attached after a receive-only negotiation creates its sending pipeline. Streamless sender IDs stay synchronized when the track changes.
+- Incoming SSRCs are matched to their signaled transceiver after renegotiation, including packets arriving before signaling. Retargeting an encoded transform discards queued frames from the previous binding.
 - Opus RTP payloads pass through encoded-transform workers on both sender and receiver. RTP identity and timing metadata are retained, changed payload sizes are supported, output is ordered on a serial queue, and queued native callbacks and output buffers are bounded independently of JavaScript garbage collection. Closing a transform worker does not silently resume plaintext transmission. This is an initial audio implementation; encrypted video is not implemented and its payloads are blocked while a transform is attached.
 - Backport upstream commit [ad718fae36e5](https://github.com/WebKit/WebKit/commit/ad718fae36e5b41ae7ebe55d6422d667e75a09fa), fixing WebAudio stream timestamps and durations so audio sinks do not discard the samples as gaps ([bug 325697](https://bugs.webkit.org/show_bug.cgi?id=325697)).
 - Explicit Unix PulseAudio server addresses no longer trip a sandbox-launcher string assertion.
@@ -31,7 +33,7 @@ Compiled objects and the private prefix survive between runs. The Rust toolchain
 
 1. PNG, JPEG, GIF, WebP and AVIF decoding.
 2. Decoded synthetic Opus audio with multiple transceivers and renegotiation, including measured tone energy at a virtual speaker output.
-3. AES-GCM worker encryption/decryption, including changed payload lengths, metadata, worker replacement, explicit transform removal and worker progress checks.
+3. AES-GCM worker encryption/decryption after a receive-only negotiation and microphone attachment, including changed payload lengths, metadata, worker replacement, explicit transform removal and worker progress checks.
 4. An audible first participant alongside a worker that drops all frames, followed by the delayed participant becoming audible.
 5. Microphone capture, explicit output switching with measured tone energy, and device add/default-change/remove notifications using isolated virtual devices.
 

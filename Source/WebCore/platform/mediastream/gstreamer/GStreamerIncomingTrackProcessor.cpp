@@ -426,8 +426,17 @@ void GStreamerIncomingTrackProcessor::trackReady()
     callOnMainThread([endPoint = protect(*endPoint), this] {
         if (endPoint->isStopped())
             return;
-        endPoint->connectIncomingTrack(m_data);
+        connectTrack();
     });
+}
+
+void GStreamerIncomingTrackProcessor::connectTrack()
+{
+    ASSERT(isMainThread());
+    auto endPoint = m_endPoint.get();
+    if (!endPoint || endPoint->isStopped() || !m_isReady || m_isConnected)
+        return;
+    m_isConnected = endPoint->connectIncomingTrack(m_data);
 }
 
 void GStreamerIncomingTrackProcessor::trackHasReceivedFirstPacket()
